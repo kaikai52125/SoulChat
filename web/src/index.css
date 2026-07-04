@@ -2782,6 +2782,30 @@ body {
   cursor: not-allowed;
 }
 
+/* 角色页响应式 */
+@media (max-width: 768px) {
+  .persona-page-header {
+    margin-bottom: 16px;
+  }
+  .persona-page-header h4 {
+    font-size: 16px;
+  }
+  .persona-scene-card {
+    padding: 14px;
+  }
+  .persona-scene-icon {
+    font-size: 26px;
+  }
+}
+
+/* 角色编辑弹窗移动端：Tab 内 form 堆叠 */
+@media (max-width: 640px) {
+  .persona-modal .ant-tabs-tab {
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+}
+
 /* 对话气泡头像 */
 .chat-avatar {
   width: 38px;
