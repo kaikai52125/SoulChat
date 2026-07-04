@@ -1,6 +1,6 @@
-# Comet 后端（api/）
+# SoulChat 后端（api/）
 
-彗记 Comet 的 FastAPI 后端。严格分层：**Controller → Service → Repository → Model/DB**，调用方向单向。横切能力（RAG / 记忆 / Agent / LLM / 存储）放在 `core/` 下按子系统分目录。
+SoulChat 的 FastAPI 后端。严格分层：**Controller → Service → Repository → Model/DB**，调用方向单向。横切能力（RAG / 记忆 / Agent / LLM / 存储）放在 `core/` 下按子系统分目录。
 
 ---
 
@@ -80,7 +80,7 @@ api/
 │   │   ├── rag/             #   知识库检索
 │   │   │   ├── parser.py    #     PDF/Word/MD/TXT/HTML 解析
 │   │   │   ├── chunker.py   #     父子分块（tiktoken）
-│   │   │   ├── es_index.py  #     comet_chunks 索引（IK 分词 + 向量）
+│   │   │   ├── es_index.py  #     soulchat_chunks 索引（IK 分词 + 向量）
 │   │   │   ├── es_store.py  #     bulk_index / delete / update_tags
 │   │   │   ├── search.py    #     混合检索（向量 + BM25 融合 + 可选 rerank + 父块上下文）
 │   │   │   ├── classifier.py#     AI 自动分类打标签
@@ -137,7 +137,7 @@ api/
 
 ## 模型与 API Key 配置（重点）
 
-Comet 不在 `.env` 里写任何 LLM 的 API Key。**所有模型与其 API Key 都由登录用户在前端「模型配置」页动态添加**，按用户隔离、存进数据库（`model_configs` 表）。这样多用户各用各的 Key，互不可见。
+SoulChat 不在 `.env` 里写任何 LLM 的 API Key。**所有模型与其 API Key 都由登录用户在前端「模型配置」页动态添加**，按用户隔离、存进数据库（`model_configs` 表）。这样多用户各用各的 Key，互不可见。
 
 ### 模型类型（type）
 
@@ -315,10 +315,10 @@ docker compose build elasticsearch
 docker compose up -d elasticsearch
 ```
 
-`comet_chunks` 索引 content 字段用 `ik_max_word`（写入）/ `ik_smart`（查询）。若用旧 mapping 建过，删掉让其重建：
+`soulchat_chunks` 索引 content 字段用 `ik_max_word`（写入）/ `ik_smart`（查询）。若用旧 mapping 建过，删掉让其重建：
 
 ```bash
-curl -X DELETE http://localhost:9200/comet_chunks
+curl -X DELETE http://localhost:9200/soulchat_chunks
 # 重启后端会自动重建带 IK 的索引
 ```
 

@@ -53,7 +53,7 @@ export default function ReportSharePage() {
           <img src={logo} alt="彗记" className="share-logo" />
           <div>
             <div className="share-title">{data.title}</div>
-            <div className="share-sub">来自彗记 Comet 的深度研究报告</div>
+            <div className="share-sub">来自 SoulChat 的深度研究报告</div>
           </div>
         </div>
 
@@ -63,7 +63,7 @@ export default function ReportSharePage() {
 
         <div className="share-footer">
           <span>本页内容由用户分享 · 由</span>
-          <a onClick={() => navigate('/')}> 彗记 Comet </a>
+          <a onClick={() => navigate('/')}> SoulChat </a>
           <span>生成</span>
         </div>
       </div>

@@ -171,7 +171,7 @@ async def _run(args) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Comet 离线评测(RAG + 记忆,L1 自制集 + L2/L3 公共基准)")
+    p = argparse.ArgumentParser(description="SoulChat 离线评测(RAG + 记忆,L1 自制集 + L2/L3 公共基准)")
     # 通用
     p.add_argument("--skip-check", action="store_true", help="跳过模型可用性自检")
 

@@ -11,7 +11,7 @@ router = APIRouter(tags=["health"])
 @router.get("/hello")
 async def hello():
     """阶段0验证点：前后端跑通的 hello 接口。"""
-    return success({"app": settings.app_name, "message": "你好，彗记 Comet"})
+    return success({"app": settings.app_name, "message": "你好，SoulChat"})
 
 
 @router.get("/health")

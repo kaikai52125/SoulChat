@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     )
 
     # 应用
-    app_name: str = "Comet"
+    app_name: str = "SoulChat"
     app_env: str = "development"
     app_debug: bool = True
     app_host: str = "0.0.0.0"
@@ -27,9 +27,9 @@ class Settings(BaseSettings):
     # PostgreSQL
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_user: str = "comet"
-    postgres_password: str = "comet"
-    postgres_db: str = "comet"
+    postgres_user: str = "soulchat"
+    postgres_password: str = "soulchat"
+    postgres_db: str = "soulchat"
     # PG 连接池
     db_pool_size: int = 10
     db_max_overflow: int = 20
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # Neo4j
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "cometneo4j"
+    neo4j_password: str = "soulchatneo4j"
     neo4j_max_pool_size: int = 50
     neo4j_connection_timeout: int = 30  # 秒
 
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"  # DEBUG/INFO/WARNING/ERROR
     log_to_console: bool = True
     log_to_file: bool = True
-    log_file_path: str = "./logs/comet.log"
+    log_file_path: str = "./logs/soulchat.log"
     log_max_bytes: int = 10 * 1024 * 1024  # 单文件 10MB
     log_backup_count: int = 5  # 轮转保留份数
     db_echo: bool = False  # 是否打印 SQL（调试用，默认关，避免日志刷屏）
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     # 定时任务执行（单次研究的整体硬超时，防卡死任务长期占住 worker；跨平台用 asyncio.wait_for）
     research_task_timeout: int = 900  # 单次定时研究整体超时（秒）
     # 定时任务完成后推送通知用的站点地址（拼报告链接）
-    notify_site_url: str = "https://cometxrzs.top"
+    notify_site_url: str = "https://soulchat.top"
 
     # ── V0.0.5 ② Verifier Loop（Loop Engineering 落地）──
     # 是否启用 Verifier Loop。关闭时 research engine 跳过质量复核环节,行为与之前完全一致。

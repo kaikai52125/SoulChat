@@ -138,7 +138,7 @@ def compute_cost_cny(model, input_tokens, output_tokens) -> float:
 
 每次 llm_call span 自动算 `cost_cny`,trace 级聚合 `total_cost_cny` + `total_tokens`。
 
-**取舍**:单价手动维护,**不做实时拉外部 API 同步**(各家定价波动小、且 LLM 厂商没统一 API)。配置项 `COMET_PRICING_OVERRIDES` 允许 .env 覆盖。
+**取舍**:单价手动维护,**不做实时拉外部 API 同步**(各家定价波动小、且 LLM 厂商没统一 API)。配置项 `SOULCHAT_PRICING_OVERRIDES` 允许 .env 覆盖。
 
 ### 3.6 异步批量落库(`span_recorder.py`)
 
@@ -220,7 +220,7 @@ HomePage 在 Agent 简报后渲染,无数据时不显示。
 | 取舍 | 选择 | 原因 |
 |------|-----|------|
 | 接入 Jaeger / Tempo / LangSmith? | 不接 | 自有 PG 表够用,字段名兼容 OTel GenAI 规范,未来要切换零成本。商业版工程量大但本项目流量小,负收益。 |
-| 实时同步外部 API 单价? | 不做 | 各家定价波动小、且没统一 API。手动维护 + `COMET_PRICING_OVERRIDES` 覆盖 |
+| 实时同步外部 API 单价? | 不做 | 各家定价波动小、且没统一 API。手动维护 + `SOULCHAT_PRICING_OVERRIDES` 覆盖 |
 | Replay(基于历史 trace 改 prompt 重跑) | 不做 | LangSmith 高级功能,工程量大,本版无强需求,留 backlog |
 | 流式 token 都建 span? | 不建 | token 级粒度浪费,只在 LLM 调用结束时记一个 llm_call span |
 | 全采还是采样? | 默认全采 | 本项目流量小;可配置 `TRACE_SAMPLE_RATE`(0~1)在高流量下降采样 |

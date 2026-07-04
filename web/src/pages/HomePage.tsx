@@ -27,7 +27,7 @@ import { researchApi, type ReportBrief } from '@/api/research'
 import { modelApi, type ModelConfigItem } from '@/api/models'
 import { useAuthStore } from '@/stores/authStore'
 
-const WELCOME_SEEN_KEY = 'comet_welcome_seen'
+const WELCOME_SEEN_KEY = 'soulchat_welcome_seen'
 
 /**
  * 仪表盘 —— V0.0.5 收尾大瘦身:只保留日常真正高频用的 4 块。
@@ -205,7 +205,7 @@ export default function HomePage() {
     >
       <div style={{ textAlign: 'center', padding: '8px 4px' }}>
         <div style={{ fontSize: 34, marginBottom: 6 }}>👋</div>
-        <h2 style={{ margin: '0 0 8px', fontSize: 22 }}>欢迎使用彗记 Comet</h2>
+        <h2 style={{ margin: '0 0 8px', fontSize: 22 }}>欢迎使用 SoulChat</h2>
         <p style={{ color: '#475467', lineHeight: 1.85, margin: '0 0 14px' }}>
           这是你的个人 AI 知识库 + 记忆助手:和 AI 对话、把文档/网页存进知识库让它引用、
           它还会自动记住你聊过的事,越用越懂你。
@@ -571,7 +571,7 @@ export default function HomePage() {
         <p className="dash-hero__sub">
           {needsSetup
             ? '只差一步就能开始:先配置一个对话大模型,下面有详细引导。'
-            : '欢迎使用彗记 Comet —— 你的个人 AI 知识库与记忆助手。'}
+            : '欢迎使用 SoulChat —— 你的个人 AI 角色扮演与记忆助手。'}
         </p>
       </div>
 

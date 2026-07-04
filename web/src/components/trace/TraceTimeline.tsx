@@ -55,24 +55,24 @@ const KEY_LABELS: Record<string, string> = {
   'gen_ai.response.finish_reasons': '结束原因',
   'gen_ai.tool.name': '工具',
   'gen_ai.embedding.dimensions': '向量维度',
-  'comet.chat.iteration': '对话轮次',
-  'comet.chat.tools_bound': '可用工具数',
-  'comet.chat.mode': '调用模式',
-  'comet.tool.name': '工具',
-  'comet.tool.query': '查询内容',
-  'comet.tool.provider': '工具来源',
-  'comet.retrieval.query_count': '检索角度数',
-  'comet.retrieval.hit_count': '命中条数',
-  'comet.verifier.kind': '审稿模式',
-  'comet.verifier.rubric': '评分规则',
-  'comet.loop.iteration_no': '回炉轮次',
-  'comet.repair.action': '修复策略',
-  'comet.vision.mime': '图片类型',
-  'comet.rerank.doc_count': '待重排数',
-  'comet.rerank.top_n': '返回前 N',
-  'comet.distill.source_count': '来源数',
-  'comet.curator.section_count': '章节数',
-  'comet.curator.learning_count': '要点数',
+  'soulchat.chat.iteration': '对话轮次',
+  'soulchat.chat.tools_bound': '可用工具数',
+  'soulchat.chat.mode': '调用模式',
+  'soulchat.tool.name': '工具',
+  'soulchat.tool.query': '查询内容',
+  'soulchat.tool.provider': '工具来源',
+  'soulchat.retrieval.query_count': '检索角度数',
+  'soulchat.retrieval.hit_count': '命中条数',
+  'soulchat.verifier.kind': '审稿模式',
+  'soulchat.verifier.rubric': '评分规则',
+  'soulchat.loop.iteration_no': '回炉轮次',
+  'soulchat.repair.action': '修复策略',
+  'soulchat.vision.mime': '图片类型',
+  'soulchat.rerank.doc_count': '待重排数',
+  'soulchat.rerank.top_n': '返回前 N',
+  'soulchat.distill.source_count': '来源数',
+  'soulchat.curator.section_count': '章节数',
+  'soulchat.curator.learning_count': '要点数',
   batch_size: '批量大小',
   tool_calls_count: '触发工具数',
   source_count: '采集来源数',
@@ -115,7 +115,7 @@ function fmtValue(key: string, value: unknown): string {
     const map: Record<string, string> = { ok: '成功', error: '失败', success: '成功' }
     return map[String(value)] || String(value)
   }
-  if (key === 'comet.chat.mode') {
+  if (key === 'soulchat.chat.mode') {
     const map: Record<string, string> = { react: 'ReAct 推理', function_calling: 'Function Calling' }
     return map[String(value)] || String(value)
   }

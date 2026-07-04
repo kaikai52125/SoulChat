@@ -61,7 +61,7 @@ agent_spans(
   span_type[planner|retriever|writer|tool_call|verifier|repair|mcp_call|llm_call|other],
   name,                    -- 人话名(如「写章节 1/5: 引言」/「工具:web_search」)
   payload jsonb,           -- 输入输出摘要(不存全文,存 request_summary / response_preview / output_preview 等前 600 字)
-  attributes jsonb,        -- OTel GenAI 标准属性 + comet.* 业务扩展
+  attributes jsonb,        -- OTel GenAI 标准属性 + soulchat.* 业务扩展
   model_name, input_tokens, output_tokens, cached_tokens, cost_cny,
   status, error_message,
   started_at, finished_at, duration_ms,
@@ -298,7 +298,7 @@ tracing_flush_interval: float = 2.0   # 强制 flush 间隔(秒)
 tracing_queue_maxsize: int = 5000     # 队列上限(满了丢最旧)
 ```
 
-`COMET_PRICING_OVERRIDES` 环境变量(后续可扩):JSON 覆盖内置单价表,无需改代码。
+`SOULCHAT_PRICING_OVERRIDES` 环境变量(后续可扩):JSON 覆盖内置单价表,无需改代码。
 
 ## 十二、未来演进路径
 

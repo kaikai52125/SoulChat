@@ -1,4 +1,4 @@
-# Comet（彗记）— 项目总览与面试开场
+# SoulChat（SoulChat）— 项目总览与面试开场
 
 > 个人 AI 知识库 + 记忆助手。本篇是整个项目的总览与「面试开场」资料：一句话介绍、技术栈、架构图、能力亮点、STAR 项目叙述。
 > 配套：本目录 `能力地图与JD对照.md` 把项目能力逐条对到 Agent 开发岗招聘要求；各能力域详细设计见 `01~07` 文件夹。
@@ -7,11 +7,11 @@
 
 ## 1. 一句话介绍
 
-Comet 是一个多用户的**个人 AI 知识库与记忆助手**：把用户的文档/图片/网页沉淀为可语义检索的知识库，从对话中自动萃取「记忆」构建专属知识图谱，并用 **LLM Agent 自主编排「知识库 / 记忆 / 联网 + 可外接的 MCP 工具」** 来回答问题；进一步支持**深度研究报告、定时主动任务、多 Agent 群聊、情绪化个性化**。前后端分离，已部署上线（HTTPS）。
+SoulChat 是一个多用户的**个人 AI 知识库与记忆助手**：把用户的文档/图片/网页沉淀为可语义检索的知识库，从对话中自动萃取「记忆」构建专属知识图谱，并用 **LLM Agent 自主编排「知识库 / 记忆 / 联网 + 可外接的 MCP 工具」** 来回答问题；进一步支持**深度研究报告、定时主动任务、多 Agent 群聊、情绪化个性化**。前后端分离，已部署上线（HTTPS）。
 
 **30 秒面试开场版**：
 
-> 我独立做了一个个人 AI 知识库 + 记忆助手 Comet。核心是三层能力：一是 **RAG 知识库**，文档/图片/网页入库、中文混合检索带引用；二是**记忆系统**，从对话自动萃取三元组写进 Neo4j 知识图谱，做成用户画像 + 经历时间线；三是 **Agent 智能问答**，把知识库/记忆/联网/MCP 做成工具让大模型自主编排，强模型走 function calling、弱模型走 ReAct 降级，全程 SSE 流式。在这之上还做了对标 GPT Researcher 的**深度研究 Agent**、可定时自动跑的**主动任务**、**多 Agent 群聊**。技术栈是 FastAPI + React，用了 PostgreSQL / Elasticsearch / Neo4j / Redis 四种存储 + Celery 异步。
+> 我独立做了一个个人 AI 知识库 + 记忆助手 SoulChat。核心是三层能力：一是 **RAG 知识库**，文档/图片/网页入库、中文混合检索带引用；二是**记忆系统**，从对话自动萃取三元组写进 Neo4j 知识图谱，做成用户画像 + 经历时间线；三是 **Agent 智能问答**，把知识库/记忆/联网/MCP 做成工具让大模型自主编排，强模型走 function calling、弱模型走 ReAct 降级，全程 SSE 流式。在这之上还做了对标 GPT Researcher 的**深度研究 Agent**、可定时自动跑的**主动任务**、**多 Agent 群聊**。技术栈是 FastAPI + React，用了 PostgreSQL / Elasticsearch / Neo4j / Redis 四种存储 + Celery 异步。
 
 ---
 
@@ -26,7 +26,7 @@ Comet 是一个多用户的**个人 AI 知识库与记忆助手**：把用户的
 | 记忆图谱 | Neo4j 5.26 | 实体-关系-事件三元组，向量索引 + cjk 全文索引 |
 | 异步/缓存 | Celery + Redis | 多队列：parse / memory / beat / research |
 | LLM 编排 | LangChain + langchain-openai | Agent 工具循环；MCP 用 langchain-mcp-adapters |
-| 部署 | Docker Compose + 腾讯云轻量 + Nginx + HTTPS | `https://cometxrzs.top` |
+| 部署 | Docker Compose + 腾讯云轻量 + Nginx + HTTPS | `https://soulchat.top` |
 | 依赖 | 后端 uv，前端 npm | — |
 
 **为什么用四种存储（高频）**：

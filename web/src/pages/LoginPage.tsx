@@ -11,7 +11,7 @@ interface FormValues {
   password: string
 }
 
-const LS_REMEMBER = 'comet_remember'
+const LS_REMEMBER = 'soulchat_remember'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -176,8 +176,8 @@ export default function LoginPage() {
     <div className="applogin">
       <div className="applogin-bg" />
       <div className="applogin-box">
-        <img src={logo} alt="Comet" className="applogin-logo" />
-        <h1 className="applogin-title">彗记 Comet</h1>
+        <img src={logo} alt="SoulChat" className="applogin-logo" />
+        <h1 className="applogin-title">SoulChat</h1>
         <p className="applogin-sub">
           {tab === 'login' ? '登录以继续你的知识之旅' : '创建账号，开启你的 AI 知识库'}
         </p>

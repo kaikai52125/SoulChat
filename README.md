@@ -1,8 +1,8 @@
-# Comet（彗记）— 个人 AI 知识库与记忆助手
+# SoulChat（SoulChat）— 个人 AI 知识库与记忆助手
 
 > Personal AI Knowledge & Memory Assistant
 
-Comet 是一个多用户的个人 AI 知识库 + 记忆助手：把你的文档、图片、网页沉淀成可语义检索的知识库，从对话中自动萃取「记忆」构建你的专属知识图谱，并用 LLM Agent 自主编排「知识库 / 记忆 / 联网」三类工具来回答问题。
+SoulChat 是一个多用户的个人 AI 知识库 + 记忆助手：把你的文档、图片、网页沉淀成可语义检索的知识库，从对话中自动萃取「记忆」构建你的专属知识图谱，并用 LLM Agent 自主编排「知识库 / 记忆 / 联网」三类工具来回答问题。
 
 ---
 
@@ -113,8 +113,8 @@ Comet 是一个多用户的个人 AI 知识库 + 记忆助手：把你的文档�
 ### 第 1 步：克隆代码
 
 ```bash
-git clone git@github.com:lm041520/Comet.git
-cd Comet
+git clone git@github.com:lm041520/SoulChat.git
+cd SoulChat
 ```
 
 ### 第 2 步：启动四个存储（Docker）
@@ -256,7 +256,7 @@ npm run dev
 ## 目录结构
 
 ```
-Comet/
+SoulChat/
 ├── api/                      # 后端 FastAPI
 │   ├── app/
 │   │   ├── controllers/      # 路由层

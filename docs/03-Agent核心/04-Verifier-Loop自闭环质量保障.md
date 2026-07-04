@@ -23,7 +23,7 @@
 
 ## 2. 三个解耦(范式核心)
 
-| 解耦原则 | 在 Comet 的实现 |
+| 解耦原则 | 在 SoulChat 的实现 |
 |---------|----------------|
 | **Verify ⊥ Generate** | Verifier 独立 LLM session,不带 generator 上下文;支持跨 family 模型(SameModelVerifier 同模型基线 / CrossModelVerifier 跨家族 + 工厂自动降级)。 |
 | **Controller ⊥ Task** | `LoopController` 通用状态机,深度研究 + 定时任务 + HotpotQA A/B 共用同一实例,wire-up 只多一行。 |

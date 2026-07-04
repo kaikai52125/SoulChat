@@ -128,8 +128,8 @@ async def run_function_calling(
             f"chat:{chat_model_name} (轮 {iteration + 1})",
             model_name=chat_model_name,
             attributes={
-                "comet.chat.iteration": iteration + 1,
-                "comet.chat.tools_bound": len(tools),
+                "soulchat.chat.iteration": iteration + 1,
+                "soulchat.chat.tools_bound": len(tools),
             },
         ) as lsp:
             lsp.set_payload("messages_count", len(messages))
@@ -209,8 +209,8 @@ async def run_function_calling(
                     f"工具:{name}",
                     span_type="tool_call",
                     attributes={
-                        "comet.tool.name": name,
-                        "comet.tool.query": str(query)[:200],
+                        "soulchat.tool.name": name,
+                        "soulchat.tool.query": str(query)[:200],
                     },
                 ) as tsp:
                     try:
@@ -282,8 +282,8 @@ async def run_react(
             f"chat(ReAct):{react_model_name} (轮 {iteration + 1})",
             model_name=react_model_name,
             attributes={
-                "comet.chat.iteration": iteration + 1,
-                "comet.chat.mode": "react",
+                "soulchat.chat.iteration": iteration + 1,
+                "soulchat.chat.mode": "react",
             },
         ) as lsp:
             resp = await model.ainvoke(convo)
@@ -342,8 +342,8 @@ async def run_react(
                 f"工具:{tool_name}",
                 span_type="tool_call",
                 attributes={
-                    "comet.tool.name": tool_name,
-                    "comet.tool.query": str(query)[:200],
+                    "soulchat.tool.name": tool_name,
+                    "soulchat.tool.query": str(query)[:200],
                 },
             ) as tsp:
                 try:

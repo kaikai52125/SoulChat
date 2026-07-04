@@ -30,10 +30,10 @@ from app.core.agent.loop.store import LoopStore
 from app.core.agent.loop.verifier import Verifier, build_verifier
 from app.core.agent.tracing import get_tracer
 from app.core.agent.tracing.otel_attrs import (
-    COMET_LOOP_ITERATION_NO,
-    COMET_REPAIR_ACTION,
-    COMET_VERIFIER_KIND,
-    COMET_VERIFIER_RUBRIC,
+    SOULCHAT_LOOP_ITERATION_NO,
+    SOULCHAT_REPAIR_ACTION,
+    SOULCHAT_VERIFIER_KIND,
+    SOULCHAT_VERIFIER_RUBRIC,
 )
 from app.core.logging import get_logger
 from app.models.loop_model import (
@@ -188,9 +188,9 @@ class LoopController:
                         f"verifier 第 {iteration_no} 轮",
                         span_type="verifier",
                         attributes={
-                            COMET_LOOP_ITERATION_NO: iteration_no,
-                            COMET_VERIFIER_KIND: verifier_kind,
-                            COMET_VERIFIER_RUBRIC: self.rubric_name,
+                            SOULCHAT_LOOP_ITERATION_NO: iteration_no,
+                            SOULCHAT_VERIFIER_KIND: verifier_kind,
+                            SOULCHAT_VERIFIER_RUBRIC: self.rubric_name,
                         },
                     ) as vsp:
                         vsp.set_iteration_id(iter_id)
@@ -310,8 +310,8 @@ class LoopController:
                         f"repair: {action.kind} 第 {iteration_no} 轮",
                         span_type="repair",
                         attributes={
-                            COMET_LOOP_ITERATION_NO: iteration_no,
-                            COMET_REPAIR_ACTION: action.kind,
+                            SOULCHAT_LOOP_ITERATION_NO: iteration_no,
+                            SOULCHAT_REPAIR_ACTION: action.kind,
                         },
                     ) as rsp:
                         rsp.set_iteration_id(iter_id)

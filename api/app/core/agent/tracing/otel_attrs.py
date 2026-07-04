@@ -29,14 +29,14 @@ GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
 # Embedding 专用
 GEN_AI_EMBEDDING_DIMENSIONS = "gen_ai.embedding.dimensions"
 
-# 业务扩展属性(comet.* 前缀,与标准 gen_ai.* 区分,未来易剥离)
-COMET_RETRIEVAL_TOP_K = "comet.retrieval.top_k"
-COMET_RETRIEVAL_HIT_COUNT = "comet.retrieval.hit_count"
-COMET_VERIFIER_KIND = "comet.verifier.kind"  # same / cross
-COMET_VERIFIER_RUBRIC = "comet.verifier.rubric"  # research / task
-COMET_LOOP_ITERATION_NO = "comet.loop.iteration_no"
-COMET_REPAIR_ACTION = "comet.repair.action"  # patch / rewrite
-COMET_TASK_TYPE = "comet.task.type"  # research / chat / agent_task
+# 业务扩展属性(soulchat.* 前缀,与标准 gen_ai.* 区分,未来易剥离)
+SOULCHAT_RETRIEVAL_TOP_K = "soulchat.retrieval.top_k"
+SOULCHAT_RETRIEVAL_HIT_COUNT = "soulchat.retrieval.hit_count"
+SOULCHAT_VERIFIER_KIND = "soulchat.verifier.kind"  # same / cross
+SOULCHAT_VERIFIER_RUBRIC = "soulchat.verifier.rubric"  # research / task
+SOULCHAT_LOOP_ITERATION_NO = "soulchat.loop.iteration_no"
+SOULCHAT_REPAIR_ACTION = "soulchat.repair.action"  # patch / rewrite
+SOULCHAT_TASK_TYPE = "soulchat.task.type"  # research / chat / agent_task
 
 
 # provider → gen_ai.system 名映射(对齐 OTel 命名)

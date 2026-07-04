@@ -219,23 +219,23 @@ async def run_research(
             async with tracer.span(
                 f"检索:{len(queries)} 个角度",
                 span_type="retriever",
-                attributes={"comet.retrieval.query_count": len(queries)},
+                attributes={"soulchat.retrieval.query_count": len(queries)},
             ) as rsp:
                 collected: list[Source] = []
                 if ws:
                     provider, api_key = ws
                     try:
-                        async with tracer.span("检索:联网", span_type="tool_call", attributes={"comet.tool.name": "web_search", "comet.tool.provider": provider}):
+                        async with tracer.span("检索:联网", span_type="tool_call", attributes={"soulchat.tool.name": "web_search", "soulchat.tool.provider": provider}):
                             collected += await gather_web_sources(provider, api_key, queries, emit=emit)
                     except Exception as e:
                         logger.warning("研究联网检索整体失败（继续）: %s", e)
                 try:
-                    async with tracer.span("检索:知识库", span_type="tool_call", attributes={"comet.tool.name": "kb_search"}):
+                    async with tracer.span("检索:知识库", span_type="tool_call", attributes={"soulchat.tool.name": "kb_search"}):
                         collected += await gather_kb_sources(session, user_id, queries, kb_ids, emit=emit)
                 except Exception as e:
                     logger.warning("研究知识库检索整体失败（继续）: %s", e)
                 try:
-                    async with tracer.span("检索:MCP 增强", span_type="mcp_call", attributes={"comet.tool.name": "mcp_research"}):
+                    async with tracer.span("检索:MCP 增强", span_type="mcp_call", attributes={"soulchat.tool.name": "mcp_research"}):
                         collected += await gather_mcp_sources(
                             session, user_id, topic, model, supports_fc, emit=emit
                         )
@@ -266,7 +266,7 @@ async def run_research(
         async with tracer.span(
             f"逐源提炼:{len(sources)} 个来源",
             span_type="writer",
-            attributes={"comet.distill.source_count": len(sources)},
+            attributes={"soulchat.distill.source_count": len(sources)},
         ) as dsp:
             async for ev in _pump(
                 h2, lambda emit: distill_sources(model, topic, headings, sources, emit=emit)
@@ -320,8 +320,8 @@ async def run_research(
             "大纲整理:论点+证据分配",
             span_type="planner",
             attributes={
-                "comet.curator.section_count": len(plan.sections),
-                "comet.curator.learning_count": len(learnings),
+                "soulchat.curator.section_count": len(plan.sections),
+                "soulchat.curator.learning_count": len(learnings),
             },
         ):
             curated = await curate_outline(model, topic, plan.sections, learnings)

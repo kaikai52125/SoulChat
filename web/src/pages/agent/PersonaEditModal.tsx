@@ -191,7 +191,7 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
             onChange={(e) => setPrompt(e.target.value)}
             autoSize={{ minRows: 5, maxRows: 12 }}
             placeholder="描述这个角色的身份、说话风格、口头禅等。例如：你是周杰伦，说话随性幽默，偶尔哼几句歌词，然后点击优化即可生成完整提示词…"
-            maxLength={4000}
+            maxLength={20000}
           />
 
           <div className="persona-field-label" style={{ marginTop: 14 }}>

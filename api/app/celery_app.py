@@ -12,7 +12,7 @@ from celery.schedules import crontab
 from app.config import settings
 
 celery_app = Celery(
-    "comet",
+    "soulchat",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
     include=[

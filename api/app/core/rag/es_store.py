@@ -1,4 +1,4 @@
-"""comet_chunks 索引的写入与删除。"""
+"""soulchat_chunks 索引的写入与删除。"""
 import uuid
 from datetime import datetime, timezone
 

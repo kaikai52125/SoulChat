@@ -1,7 +1,7 @@
 # 部署 · HTTPS · 踩坑集 — 设计与面试
 
 > Docker Compose 部署到腾讯云、Nginx 反代 + HTTPS，以及全项目踩过的工程坑汇总。
-> 对应能力域：**工程化 / 部署运维**。部署形态：腾讯云轻量 + Docker Compose + Nginx + Let's Encrypt HTTPS（`https://cometxrzs.top`）。
+> 对应能力域：**工程化 / 部署运维**。部署形态：腾讯云轻量 + Docker Compose + Nginx + Let's Encrypt HTTPS（`https://soulchat.top`）。
 
 ---
 
@@ -45,7 +45,7 @@ flowchart TD
 ### 3.2 Nginx 反向代理 + HTTPS
 
 - Nginx 统一入口：`/api` 转后端、`/` 转前端静态。
-- HTTPS：域名备案 + Let's Encrypt 证书，`cometxrzs.top` 绿锁。
+- HTTPS：域名备案 + Let's Encrypt 证书，`soulchat.top` 绿锁。
 - **`client_max_body_size 100m`**：修文档/图片上传 413（默认 1m 太小）。
 - **`X-Accel-Buffering: no` / `proxy_buffering off`**：SSE 流式必须关 Nginx 缓冲，否则不是真流式（见 SSE 篇）。
 

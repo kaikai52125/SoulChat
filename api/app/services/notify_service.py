@@ -63,7 +63,7 @@ class NotifyService:
         ok, err = await pusher.push(
             ch.channel_type,
             target,
-            "彗记 Comet 测试推送",
+            "SoulChat 测试推送",
             "如果你收到这条消息，说明推送渠道配置成功 🎉",
         )
         if not ok:

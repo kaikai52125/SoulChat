@@ -31,7 +31,7 @@ def write_report(results: dict, setup_stats: dict | None = None) -> Path:
     _RESULTS_DIR.mkdir(exist_ok=True)
     ts = _ts()
     lines = [
-        f"# Comet 评测报告 {ts}",
+        f"# SoulChat 评测报告 {ts}",
         "",
         "> 小规模自建 gold 集的离线自测，非大规模 benchmark。",
         "> 记忆/抽取名称匹配口径：归一化 + 包含（更完整或更具体的名视为命中，如「日本京都」命中「京都」），通用自指「用户」仅精确匹配。RAG 文档按文件名精确匹配。",

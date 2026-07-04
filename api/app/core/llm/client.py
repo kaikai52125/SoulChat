@@ -272,7 +272,7 @@ class LLMClient:
                 GEN_AI_OPERATION_NAME: "chat",
                 GEN_AI_REQUEST_MODEL: self.model_name,
                 GEN_AI_REQUEST_MAX_TOKENS: max_tokens,
-                "comet.vision.mime": mime,
+                "soulchat.vision.mime": mime,
             },
         ) as sp:
             sp.set_payload("prompt_chars", len(prompt))
@@ -307,8 +307,8 @@ class LLMClient:
             attributes={
                 GEN_AI_OPERATION_NAME: "rerank",
                 GEN_AI_REQUEST_MODEL: self.model_name,
-                "comet.rerank.doc_count": len(documents),
-                "comet.rerank.top_n": top_n or len(documents),
+                "soulchat.rerank.doc_count": len(documents),
+                "soulchat.rerank.top_n": top_n or len(documents),
             },
         ) as sp:
             sp.set_payload("query_chars", len(query))

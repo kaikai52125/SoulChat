@@ -1,4 +1,4 @@
-"""Verifier Loop —— Loop Engineering 在 Comet 的完整落地(V0.0.5 ②)。
+"""Verifier Loop —— Loop Engineering 在 SoulChat 的完整落地(V0.0.5 ②)。
 
 把 Agent 从「LLM 自循环」升级为「外部系统驱动的循环 + 独立验证 + 智能修复 + 状态持久化」。
 

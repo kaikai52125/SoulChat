@@ -7,7 +7,7 @@ class PersonaCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=64)
     avatar_key: str | None = Field(default=None, max_length=512)
-    system_prompt: str = Field(default="", max_length=4000)
+    system_prompt: str = Field(default="", max_length=20000)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
 
@@ -16,7 +16,7 @@ class PersonaUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=64)
     avatar_key: str | None = Field(default=None, max_length=512)
-    system_prompt: str | None = Field(default=None, max_length=4000)
+    system_prompt: str | None = Field(default=None, max_length=20000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
 
 

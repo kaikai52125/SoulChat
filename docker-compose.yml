@@ -2,25 +2,25 @@ services:
   # ============ 存储层 ============
   postgres:
     image: postgres:16-alpine
-    container_name: comet-postgres
+    container_name: soulchat-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-comet}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-comet}
-      POSTGRES_DB: ${POSTGRES_DB:-comet}
+      POSTGRES_USER: ${POSTGRES_USER:-soulchat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soulchat}
+      POSTGRES_DB: ${POSTGRES_DB:-soulchat}
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-comet}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soulchat}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   elasticsearch:
     build: ./docker/es
-    image: comet-es-ik:8.17.0
-    container_name: comet-es
+    image: soulchat-es-ik:8.17.0
+    container_name: soulchat-es
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -37,9 +37,9 @@ services:
 
   neo4j:
     image: neo4j:5.26
-    container_name: comet-neo4j
+    container_name: soulchat-neo4j
     environment:
-      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-cometneo4j}
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-soulchatneo4j}
       NEO4J_server_memory_heap_max__size: 1G
     ports:
       - "7474:7474"
@@ -54,7 +54,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: comet-redis
+    container_name: soulchat-redis
     ports:
       - "6379:6379"
     volumes:
@@ -63,7 +63,7 @@ services:
   # ============ 应用层 ============
   api:
     build: ./api
-    container_name: comet-api
+    container_name: soulchat-api
     env_file:
       - .env
     environment:
@@ -89,7 +89,7 @@ services:
 
   worker:
     build: ./api
-    container_name: comet-worker
+    container_name: soulchat-worker
     command: celery -A app.celery_app.celery_app worker -l info -Q default,parse,memory,beat,research --pool=threads --concurrency=10
     env_file:
       - .env
@@ -108,7 +108,7 @@ services:
 
   beat:
     build: ./api
-    container_name: comet-beat
+    container_name: soulchat-beat
     command: celery -A app.celery_app.celery_app beat -l info
     env_file:
       - .env
@@ -120,7 +120,7 @@ services:
 
   web:
     build: ./web
-    container_name: comet-web
+    container_name: soulchat-web
     ports:
       - "5173:80"
     depends_on:

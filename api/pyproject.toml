@@ -1,7 +1,7 @@
 [project]
-name = "comet-api"
+name = "soulchat-api"
 version = "0.1.0"
-description = "彗记 Comet — 个人 AI 知识库与记忆助手 后端"
+description = "SoulChat — 个人 AI 角色扮演与记忆助手 后端"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

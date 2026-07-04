@@ -1,6 +1,6 @@
 """Elasticsearch 索引定义与初始化。
 
-统一索引 comet_chunks（个人版数据量小，单索引 + user_id 过滤足够）。
+统一索引 soulchat_chunks（个人版数据量小，单索引 + user_id 过滤足够）。
 向量维度固定 1024（通义 text-embedding-v3）。
 """
 from app.config import settings
@@ -9,7 +9,7 @@ from app.db.elastic import get_es
 
 logger = get_logger(__name__)
 
-CHUNKS_INDEX = "comet_chunks"
+CHUNKS_INDEX = "soulchat_chunks"
 VECTOR_DIMS = settings.embedding_dims
 
 # 父子分块：child 用于向量召回，parent 提供更大上下文
@@ -52,7 +52,7 @@ _MAPPING = {
 
 
 async def ensure_index() -> None:
-    """确保 comet_chunks 索引存在且 kb_id 为 keyword 类型。
+    """确保 soulchat_chunks 索引存在且 kb_id 为 keyword 类型。
 
     - 不存在：按正确 mapping 创建。
     - 已存在但 kb_id 缺失：put_mapping 补字段。
@@ -95,7 +95,7 @@ async def ensure_index() -> None:
 
 
 async def _kb_id_type(es) -> str | None:
-    """读取 comet_chunks 当前 kb_id 字段类型；不存在返回 None。"""
+    """读取 soulchat_chunks 当前 kb_id 字段类型；不存在返回 None。"""
     try:
         resp = await es.indices.get_mapping(index=CHUNKS_INDEX)
         props = resp[CHUNKS_INDEX]["mappings"].get("properties", {})
@@ -107,7 +107,7 @@ async def _kb_id_type(es) -> str | None:
 
 
 async def _rebuild_index_fix_kb_id(es) -> None:
-    """通过临时索引 reindex，把 comet_chunks 用正确 mapping 重建。
+    """通过临时索引 reindex，把 soulchat_chunks 用正确 mapping 重建。
 
     流程：建临时索引(正确 mapping) → reindex 原→临时 → 删原 → 重建原(正确 mapping)
     → reindex 临时→原 → 删临时。数据量小，串行同步等待。
