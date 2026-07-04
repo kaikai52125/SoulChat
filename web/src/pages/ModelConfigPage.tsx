@@ -362,7 +362,7 @@ export default function ModelConfigPage() {
             children: (
               <div>
                 <Typography.Paragraph style={{ marginBottom: 14, color: '#475467' }}>
-                  彗记不内置任何模型，需你自己填入大模型供应商的 API Key（密钥会
+                  SoulChat 不内置任何模型，需你自己填入大模型供应商的 API Key（密钥会
                   <b>加密存储</b>，仅你可见）。按以下步骤配置：
                 </Typography.Paragraph>
 

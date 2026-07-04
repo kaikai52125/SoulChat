@@ -40,7 +40,7 @@ export default function SharePage() {
           subTitle={error || '该分享链接不存在、已取消或已过期'}
           extra={
             <Button type="primary" onClick={() => navigate('/')}>
-              去彗记看看
+              去 SoulChat 看看
             </Button>
           }
         />
@@ -52,7 +52,7 @@ export default function SharePage() {
     <div className="share-page">
       <div className="share-container">
         <div className="share-header">
-          <img src={logo} alt="彗记" className="share-logo" />
+          <img src={logo} alt="SoulChat" className="share-logo" />
           <div>
             <div className="share-title">{data.title}</div>
             <div className="share-sub">来自 SoulChat 的对话分享</div>

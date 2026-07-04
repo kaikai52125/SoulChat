@@ -252,7 +252,7 @@ export default function HomePage() {
       styles={{ body: { padding: 22 } }}
       title={
         <span>
-          🚀 {needsSetup ? '开始使用彗记' : '快速开始'}
+          🚀 {needsSetup ? '开始使用 SoulChat' : '快速开始'}
           <span style={{ color: '#98A2B3', fontWeight: 400, fontSize: 13, marginLeft: 10 }}>
             {finishedSteps}/{quickSteps.length} 已完成
           </span>
