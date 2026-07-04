@@ -11,6 +11,7 @@ interface Props {
   onActivate: (p: Persona) => void
   onEdit: (p: Persona) => void
   onDelete: (p: Persona) => void
+  onClick?: (p: Persona) => void
 }
 
 // 单张角色卡：玻璃拟态 + 头像光晕封面 + 当前生效流光描边
@@ -21,6 +22,7 @@ export default function PersonaCard({
   onActivate,
   onEdit,
   onDelete,
+  onClick,
 }: Props) {
   const active = persona.is_active
   const grad = personaGradientCss(persona.name)
@@ -30,7 +32,8 @@ export default function PersonaCard({
   return (
     <div
       className={`persona-card${active ? ' persona-card--active' : ''}`}
-      style={{ animationDelay: `${Math.min(index, 12) * 60}ms` }}
+      style={{ animationDelay: `${Math.min(index, 12) * 60}ms`, cursor: onClick ? 'pointer' : undefined }}
+      onClick={() => onClick?.(persona)}
     >
       {active && (
         <div className="persona-badge">

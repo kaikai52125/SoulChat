@@ -103,6 +103,10 @@ class AgentTrace(Base):
     # 模型审计:这次任务用到了哪些模型(JSON 列表,便于跨模型成本对比)
     models_used: Mapped[list] = mapped_column(JSONB, default=list)
 
+    # 关联角色 Agent（Persona → Agent 改造后，trace 记录当前对话使用的角色）
+    persona_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
     # 关联 ② Verifier Loop(若该 trace 走了 verify),便于「报告页 → 评分卡 → 查看执行轨迹」下钻
     loop_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, index=True

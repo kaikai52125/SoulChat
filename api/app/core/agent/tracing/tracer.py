@@ -138,19 +138,18 @@ class Tracer:
         task_type: str,
         task_id: uuid.UUID | None = None,
         task_name: str | None = None,
+        persona_id: uuid.UUID | None = None,
         loop_run_id: uuid.UUID | None = None,
         attributes: dict[str, Any] | None = None,
     ):
-        """启动一次完整 Agent 任务的 trace。
-
-        采样:按 `tracing_sample_rate` 决定是否真采;不采时走 NoOp 路径完全零开销。
-        """
+        """启动一次完整 Agent 任务的 trace。"""
         if not settings.tracing_enabled or random.random() > settings.tracing_sample_rate:
             yield _NoopTraceCtx()
             return
 
         record = TraceRecord(
             user_id=user_id,
+            persona_id=persona_id,
             task_type=task_type,
             task_id=task_id,
             task_name=task_name,

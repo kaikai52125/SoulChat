@@ -1,4 +1,4 @@
-"""技能（Skill）请求/响应 schema。"""
+"""技能（Skill）请求/响应 schema。每个技能归属于一个 Persona（角色）。"""
 from pydantic import BaseModel, Field
 
 
@@ -39,13 +39,15 @@ class SkillUpdate(BaseModel):
     tool_keys: list[str] | None = Field(default=None)
     kb_id: str | None = Field(default=None)
     enabled: bool | None = Field(default=None)
-    config: SkillConfig | None = Field(default=None)
+    is_public: bool | None = Field(default=None)
+    config: dict | None = Field(default=None)
 
 
 class SkillOut(BaseModel):
     """技能出参。"""
 
     id: str
+    persona_id: str
     name: str
     description: str
     icon: str
@@ -54,6 +56,7 @@ class SkillOut(BaseModel):
     kb_id: str | None
     enabled: bool
     config: dict
+    source: str
     is_builtin: bool
 
 
@@ -73,3 +76,10 @@ class OptimizeSkillPromptRequest(BaseModel):
     """技能任务提示词一键优化请求。"""
 
     prompt: str = Field(default="", max_length=8000)
+
+
+class SkillImportOut(BaseModel):
+    """技能 zip 导入结果出参。"""
+
+    skill: SkillOut
+    existing: bool = False  # 是否已存在（import_hash 去重命中）

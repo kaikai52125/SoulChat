@@ -3,6 +3,7 @@ from app.core.agent.tools.builtin import (  # noqa: F401
     datetime_tool,
     knowledge,
     memory,
+    persona_memory,
     schedule,
     web_search,
 )

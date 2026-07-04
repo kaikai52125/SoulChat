@@ -362,9 +362,22 @@ export default function GroupChatPage() {
   }, [])
 
   // 支持 ?conv=xxx 深链直接打开（如加入群聊后跳转）
+  // 支持 ?group_id=xxx 从卡组一键开聊
   useEffect(() => {
     const cid = searchParams.get('conv')
-    if (cid && cid !== activeId) {
+    const gid = searchParams.get('group_id')
+    if (gid) {
+      // 从角色卡组一键开聊：调后端创建群会话
+      import('@/api/personaGroups').then(({ personaGroupApi }) => {
+        personaGroupApi.openChat(gid).then(({ data }) => {
+          openConversation(data.id)
+        }).catch((e) => {
+          antdMessage.error((e as Error).message)
+        })
+      })
+      searchParams.delete('group_id')
+      setSearchParams(searchParams, { replace: true })
+    } else if (cid && cid !== activeId) {
       openConversation(cid)
       searchParams.delete('conv')
       setSearchParams(searchParams, { replace: true })

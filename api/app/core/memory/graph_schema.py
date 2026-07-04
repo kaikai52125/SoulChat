@@ -46,6 +46,7 @@ _PROPERTY_INDEXES = [
     f"CREATE INDEX entity_name_idx IF NOT EXISTS FOR (n:{LABEL_ENTITY}) ON (n.name)",
     # 记忆分层 / 重要度：巩固任务与检索排序的过滤维度
     f"CREATE INDEX entity_layer_idx IF NOT EXISTS FOR (n:{LABEL_ENTITY}) ON (n.memory_layer)",
+    f"CREATE INDEX entity_human_verified_idx IF NOT EXISTS FOR (n:{LABEL_ENTITY}) ON (n.human_verified)",
     f"CREATE INDEX statement_layer_idx IF NOT EXISTS FOR (n:{LABEL_STATEMENT}) ON (n.memory_layer)",
     # 洞察：按 user_id + theme 检索/收敛
     f"CREATE INDEX insight_user_idx IF NOT EXISTS FOR (n:{LABEL_INSIGHT}) ON (n.user_id)",

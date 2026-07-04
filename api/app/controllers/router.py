@@ -6,7 +6,6 @@ conversation / chat / memory / search / favorite / dashboard / task。
 from fastapi import APIRouter
 
 from app.controllers import (
-    agent_config_controller,
     agent_persona_controller,
     agent_task_controller,
     auth_controller,
@@ -47,9 +46,10 @@ api_router.include_router(file_controller.router)
 api_router.include_router(memory_controller.router)
 api_router.include_router(chat_controller.router)
 api_router.include_router(group_chat_controller.router)
-api_router.include_router(agent_config_controller.router)
 api_router.include_router(agent_persona_controller.router)
 api_router.include_router(persona_group_controller.router)
+api_router.include_router(skill_controller.persona_skill_router)
+api_router.include_router(skill_controller.marketplace_router)
 api_router.include_router(mcp_controller.router)
 api_router.include_router(tool_controller.router)
 api_router.include_router(search_controller.router)
@@ -60,7 +60,6 @@ api_router.include_router(music_controller.router)
 api_router.include_router(research_controller.router)
 api_router.include_router(agent_task_controller.router)
 api_router.include_router(notify_controller.router)
-api_router.include_router(skill_controller.router)
 api_router.include_router(conversation_share_controller.router)
 api_router.include_router(conversation_share_controller.public_router)
 api_router.include_router(trace_controller.router)

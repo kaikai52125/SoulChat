@@ -18,6 +18,7 @@ export interface SkillConfig {
 
 export interface Skill {
   id: string
+  persona_id: string
   name: string
   description: string
   icon: string
@@ -26,7 +27,10 @@ export interface Skill {
   kb_id: string | null
   enabled: boolean
   config: SkillConfig
+  source: 'builtin' | 'custom' | 'imported' | 'marketplace'
   is_builtin: boolean
+  is_public: boolean
+  call_count: number
 }
 
 export interface SkillInput {
@@ -37,6 +41,7 @@ export interface SkillInput {
   tool_keys?: string[]
   kb_id?: string | null
   enabled?: boolean
+  is_public?: boolean
   config?: SkillConfig
 }
 
@@ -50,29 +55,49 @@ export interface BuiltinSkill {
   config: SkillConfig
 }
 
+function _url(personaId: string, suffix = '') {
+  return `/personas/${personaId}/skills${suffix}`
+}
+
 export const skillApi = {
-  list() {
-    return client.get<unknown, Wrapped<Skill[]>>('/skills')
+  // ── 角色内技能 ──
+  list(personaId: string) {
+    return client.get<unknown, Wrapped<Skill[]>>(_url(personaId))
   },
-  builtins() {
-    return client.get<unknown, Wrapped<BuiltinSkill[]>>('/skills/builtins')
+  builtins(personaId: string) {
+    return client.get<unknown, Wrapped<BuiltinSkill[]>>(_url(personaId, '/builtins'))
   },
-  create(body: SkillInput) {
-    return client.post<unknown, Wrapped<Skill>>('/skills', body)
+  create(personaId: string, body: SkillInput) {
+    return client.post<unknown, Wrapped<Skill>>(_url(personaId), body)
   },
-  addBuiltin(key: string) {
-    return client.post<unknown, Wrapped<Skill>>(`/skills/builtins/${key}`, {})
+  addBuiltin(personaId: string, key: string) {
+    return client.post<unknown, Wrapped<Skill>>(_url(personaId, `/builtins/${key}`), {})
   },
-  optimizePrompt(prompt: string) {
-    return client.post<unknown, Wrapped<{ optimized: string }>>(
-      '/skills/optimize-prompt',
-      { prompt },
+  update(personaId: string, skillId: string, body: Partial<SkillInput>) {
+    return client.put<unknown, Wrapped<Skill>>(_url(personaId, `/${skillId}`), body)
+  },
+  remove(personaId: string, skillId: string) {
+    return client.delete<unknown, Wrapped<null>>(_url(personaId, `/${skillId}`))
+  },
+  importZip(personaId: string, file: File) {
+    const fd = new FormData()
+    fd.append('file', file)
+    return client.post<unknown, Wrapped<Skill>>(_url(personaId, '/import'), fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  // ── 技能市场 ──
+  marketplace(limit = 50, offset = 0) {
+    return client.get<unknown, Wrapped<Skill[]>>('/skills/marketplace', {
+      params: { limit, offset },
+    })
+  },
+  fork(skillId: string, personaId: string) {
+    return client.post<unknown, Wrapped<Skill>>(
+      `/skills/marketplace/${skillId}/fork`,
+      null,
+      { params: { persona_id: personaId } },
     )
-  },
-  update(id: string, body: Partial<SkillInput>) {
-    return client.put<unknown, Wrapped<Skill>>(`/skills/${id}`, body)
-  },
-  remove(id: string) {
-    return client.delete<unknown, Wrapped<null>>(`/skills/${id}`)
   },
 }

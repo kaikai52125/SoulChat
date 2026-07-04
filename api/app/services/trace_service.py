@@ -59,6 +59,7 @@ class TraceService:
         return TraceDetail(
             trace_id=trace.trace_id,
             task_type=trace.task_type,
+            persona_id=trace.persona_id,
             task_id=trace.task_id,
             task_name=trace.task_name,
             status=trace.status,

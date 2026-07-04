@@ -471,19 +471,33 @@ function TraceRow({ item, onOpen, isMobile }: { item: TraceListItem; onOpen: () 
       </Tag>
 
       {/* 列 2:任务名(主信息)*/}
-      <span
-        style={{
-          fontWeight: 600,
-          color: '#171719',
-          fontSize: isMobile ? 13.5 : 13,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          minWidth: 0,
-        }}
-        title={item.task_name || ''}
-      >
-        {item.task_name || `Trace ${item.trace_id.slice(0, 8)}…`}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <span
+          style={{
+            fontWeight: 600,
+            color: '#171719',
+            fontSize: isMobile ? 13.5 : 13,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+          }}
+          title={item.task_name || ''}
+        >
+          {item.task_name || `Trace ${item.trace_id.slice(0, 8)}…`}
+        </span>
+        {item.attributes?.persona_name ? (
+          <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', flexShrink: 0 }}>
+            {String(item.attributes.persona_name)}
+          </Tag>
+        ) : null}
+        {item.attributes?.skill_names && Array.isArray(item.attributes.skill_names) && (item.attributes.skill_names as string[]).length > 0 ? (
+          <Tooltip title={(item.attributes.skill_names as string[]).join(', ')}>
+            <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', flexShrink: 0 }}>
+              {(item.attributes.skill_names as string[]).length} 技能
+            </Tag>
+          </Tooltip>
+        ) : null}
       </span>
 
       {!isMobile && (

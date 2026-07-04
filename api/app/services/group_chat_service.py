@@ -162,12 +162,10 @@ class GroupChatService:
         return await self._load_members(conv.user_id, conv)
 
     async def _human_mode(self, user_id: uuid.UUID) -> bool:
-        """读用户全局真人模式开关（群主级，应用到全群角色）。失败默认关。"""
+        """读群主的当前激活角色的真人模式开关。失败默认关。"""
         try:
-            from app.repositories.agent_config_repository import AgentConfigRepository
-
-            cfg = await AgentConfigRepository(self.session).get_by_user(user_id)
-            return bool(cfg.human_mode) if cfg else False
+            persona = await self.persona_repo.get_active(user_id)
+            return bool(persona.human_mode) if persona else False
         except Exception as e:  # noqa: BLE001
             logger.warning("读取真人模式开关失败（默认关）: %s", e)
             return False
@@ -194,6 +192,10 @@ class GroupChatService:
                     "name": persona.name,
                     "system_prompt": persona.system_prompt or "",
                     "avatar_url": avatar_url,
+                    "enable_knowledge": persona.enable_knowledge,
+                    "enable_memory": persona.enable_memory,
+                    "enable_web_search": persona.enable_web_search,
+                    "kb_ids": list(persona.kb_ids or []),
                 }
             )
         return members
@@ -678,34 +680,10 @@ class GroupChatService:
             self.session, owner_id, temperature=0.8, streaming=True
         )
 
-        # 群级工具开关：开启则用「持久 MCP 会话」构建工具，整轮多角色复用同一批会话，
-        # 不重复握手；会话在 _run_ai_turn_bg 的 finally 里随 self._mcp_stack 关闭，避免泄漏。
+        # 工具由每个角色发言时按自己的 Agent 配置动态构建（_build_member_tools）
         self._mcp_stack = AsyncExitStack()
-        tools = []
-        if conv.enable_tools:
-            try:
-                from app.core.agent.tools import build_enabled_tools_cm
-                from app.repositories.knowledge_base_repository import (
-                    KnowledgeBaseRepository,
-                )
-
-                self._tool_citations = []
-                self._tool_stats = {}
-                kb_ids = await KnowledgeBaseRepository(
-                    self.session
-                ).list_chat_enabled_ids(owner_id)
-                tools = await self._mcp_stack.enter_async_context(
-                    build_enabled_tools_cm(
-                        self.session,
-                        owner_id,
-                        self._tool_citations,
-                        stats_holder=self._tool_stats,
-                        kb_ids=kb_ids,
-                    )
-                )
-            except Exception as e:
-                logger.warning("群聊工具构建失败（降级为纯对话）: %s", e)
-                tools = []
+        self._tool_citations = []
+        self._tool_stats = {}
 
         # 带图：切多模态模型 + 预读图片
         image_parts: list[dict] = []
@@ -744,7 +722,7 @@ class GroupChatService:
                     member,
                     member_names,
                     transcript,
-                    tools,
+                    owner_id,
                     image_parts,
                     human_mode=human_mode,
                 ):
@@ -912,30 +890,9 @@ class GroupChatService:
             yield _sse("error", {"message": f"模型加载失败：{e}"})
             return
 
-        # 群级工具开关：开启则每个角色发言走工具编排，否则纯人设流式
-        tools = []
-        if conv.enable_tools:
-            try:
-                from app.core.agent.tools import build_enabled_tools
-                from app.repositories.knowledge_base_repository import (
-                    KnowledgeBaseRepository,
-                )
-
-                self._tool_citations = []
-                self._tool_stats = {}
-                kb_ids = await KnowledgeBaseRepository(
-                    self.session
-                ).list_chat_enabled_ids(user_id)
-                tools = await build_enabled_tools(
-                    self.session,
-                    user_id,
-                    self._tool_citations,
-                    stats_holder=self._tool_stats,
-                    kb_ids=kb_ids,
-                )
-            except Exception as e:
-                logger.warning("群聊工具构建失败（降级为纯对话）: %s", e)
-                tools = []
+        # 工具由每个角色发言时按自己的 Agent 配置动态构建
+        self._tool_citations = []
+        self._tool_stats = {}
 
         # 本轮带图：切多模态模型 + 预读图片为内容块（每个角色看同一组图发言）
         image_parts: list[dict] = []
@@ -976,7 +933,7 @@ class GroupChatService:
                     member,
                     member_names,
                     transcript,
-                    tools,
+                    user_id,
                     image_parts,
                     human_mode=human_mode,
                 ):
@@ -1059,27 +1016,54 @@ class GroupChatService:
                 logger.warning("群聊读取/压缩图片失败（跳过）: %s", e)
         return parts
 
+    async def _build_member_tools(self, member: dict, owner_id: uuid.UUID) -> list:
+        """按单个角色配置构建工具列表。"""
+        if not any([
+            member.get("enable_knowledge"),
+            member.get("enable_memory"),
+            member.get("enable_web_search"),
+        ]):
+            return []
+        try:
+            from app.core.agent.tools import build_enabled_tools
+
+            overrides = {
+                "knowledge_search": bool(member.get("enable_knowledge")),
+                "memory_search": bool(member.get("enable_memory")),
+                "web_search": bool(member.get("enable_web_search")),
+            }
+            kb_ids = member.get("kb_ids") or None
+            return await build_enabled_tools(
+                self.session,
+                owner_id,
+                self._tool_citations,
+                overrides=overrides,
+                stats_holder=self._tool_stats,
+                kb_ids=kb_ids,
+            )
+        except Exception as e:
+            logger.warning("角色 %s 工具构建失败（降级纯对话）: %s", member.get("name"), e)
+            return []
+
     async def _speak(
         self,
         model,
         member: dict,
         member_names: list[str],
         transcript: str,
-        tools: list,
+        owner_id: uuid.UUID,
         image_parts: list[dict] | None = None,
         human_mode: bool = False,
     ) -> AsyncGenerator[dict, None]:
-        """让单个角色发言。
-
-        - 无图无工具：纯人设流式。
-        - 有工具（且模型支持 function calling）：走编排，可调知识库/记忆/联网/MCP。
-        - 有图：发言消息带图片内容块，让角色看图分析；与工具可叠加（多模态模型支持
-          function calling 时边看图边调工具，如发股票图各角色联网查实时行情分析）。
-        """
+        """让单个角色发言。工具按该角色的 Agent 配置动态构建。"""
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from app.core.agent.orchestrator import run_function_calling, run_react
 
+        # 按当前发言角色的配置构建工具 + 注入 persona_id 供 save_to_persona_memory 使用
+        from app.core.agent.tools.builtin.persona_memory import set_current_persona
+        set_current_persona(member["id"])
+        tools = await self._build_member_tools(member, owner_id)
         image_parts = image_parts or []
         # 角色发言的 system prompt（人设 + 群聊场景说明 + 当前日期 + 可选真人模式）
         sys_messages = build_speaker_messages(

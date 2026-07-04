@@ -1,6 +1,6 @@
 """问答业务服务：SSE 流式对话（方案B 工具编排）。
 
-流程：加载默认对话模型 + Agent 配置 → 构建工具（知识库/记忆/联网，按开关）
+流程：加载默认对话模型 + 角色 Agent 配置 → 构建工具（知识库/记忆/联网，按开关）
 → 强模型走原生 function calling / 弱模型走 ReAct → 流式产出 token/工具标记/引用
 → 落库 user/assistant 消息（assistant 带引用与工具调用元信息）
 → 回答后异步派发记忆萃取（对话自动萃取）。
@@ -27,14 +27,12 @@ from app.core.llm.chat_model import (
 from app.core.logging import get_logger
 from app.core.storage import get_storage
 from app.db.postgres import SessionLocal
-from app.models.agent_config_model import AgentConfig
 from app.models.conversation_model import (
     ROLE_ASSISTANT,
     ROLE_USER,
     Conversation,
     Message,
 )
-from app.repositories.agent_config_repository import AgentConfigRepository
 from app.repositories.agent_persona_repository import AgentPersonaRepository
 from app.repositories.conversation_repository import (
     ConversationRepository,
@@ -124,7 +122,6 @@ class ChatService:
         self.session = session
         self.conv_repo = ConversationRepository(session)
         self.msg_repo = MessageRepository(session)
-        self.agent_repo = AgentConfigRepository(session)
         self.persona_repo = AgentPersonaRepository(session)
         self.skill_repo = SkillRepository(session)
 
@@ -139,14 +136,18 @@ class ChatService:
         return meta or None
 
     async def _ensure_conversation(
-        self, user_id: uuid.UUID, body: ChatStreamRequest
+        self, user_id: uuid.UUID, body: ChatStreamRequest, persona=None
     ) -> Conversation:
         if body.conversation_id:
             conv = await self.conv_repo.get(user_id, body.conversation_id)
             if conv:
                 return conv
         title = body.message.strip()[:20] or "新对话"
-        return await self.conv_repo.create(Conversation(user_id=user_id, title=title))
+        conv = Conversation(user_id=user_id, title=title)
+        # 角色隔离模式：新对话归属此角色
+        if persona and persona.conversation_scope == "isolated":
+            conv.persona_id = persona.id
+        return await self.conv_repo.create(conv)
 
     async def _history_messages(self, conv_id: uuid.UUID) -> list:
         """历史消息转 LangChain 消息（不含 system 与当前问题）。
@@ -263,22 +264,33 @@ class ChatService:
             logger.warning("后台主动召回刷新失败（忽略）: user=%s err=%s", user_id, e)
 
     @staticmethod
-    def _compose_system_prompt(persona, skill) -> str:
-        """组装 system prompt：角色卡人设 + 技能任务提示词 + few-shot 示例（叠加）。
+    def _compose_system_prompt(persona, skills: list) -> str:
+        """组装 system prompt 基础部分：角色人设 + 角色 MEMORY.md + 技能任务提示词 + few-shot。
 
-        角色卡定「我是谁」，技能叠加「我现在干什么专项任务」。两者可组合。
-        开启真人模式（persona.human_mode）则再叠加「真人聊天风格」段，让回复口语化、可多气泡。
+        角色人设定「我是谁」，技能叠加「我现在干什么专项任务」，MEMORY.md 存角色记得的事。
+        不再依赖全局 AgentConfig——一切配置都从 persona 对象读取。
         """
         parts: list[str] = []
+
+        # ① 角色人设
         persona_prompt = (persona.system_prompt.strip() if persona else "") or ""
         if persona_prompt:
             parts.append(persona_prompt)
-        if skill:
-            skill_prompt = (skill.prompt or "").strip()
-            if skill_prompt:
-                parts.append(f"【当前任务能力：{skill.name}】\n{skill_prompt}")
-            # few-shot 示例拼进提示词，稳定该技能输出风格
-            few_shots = (skill.config or {}).get("few_shots") or []
+
+        # ② 角色 MEMORY.md
+        if persona and persona.memory_text:
+            memory = persona.memory_text.strip()
+            if memory:
+                parts.append(f"【角色记忆】\n{memory}")
+
+        # ③ 技能任务提示词（自动挂载 + 临时覆盖）
+        for s in skills:
+            skill_prompt = (s.prompt or "").strip()
+            if not skill_prompt:
+                continue
+            parts.append(f"【当前任务能力：{s.name}】\n{skill_prompt}")
+            # few-shot 示例
+            few_shots = (s.config or {}).get("few_shots") or []
             examples: list[str] = []
             for fs in few_shots:
                 if not isinstance(fs, dict):
@@ -289,67 +301,15 @@ class ChatService:
                     examples.append(f"示例输入：\n{inp}\n理想输出：\n{out}")
             if examples:
                 parts.append("参考以下示例的风格作答：\n\n" + "\n\n".join(examples))
-        return "\n\n".join(parts)
 
-    async def _tool_scope(
-        self, user_id: uuid.UUID, body: ChatStreamRequest, skill=None
-    ) -> tuple[dict[str, bool], list[str] | None]:
-        """计算本轮工具的 overrides（启停覆盖）与知识库检索范围 kb_ids。
-
-        - 对话页本轮临时开关（联网/知识库/记忆）作为 override，优先级最高。
-        - 技能 tool_keys 非空 → 工具白名单（只开白名单内的）。
-        - 知识库范围：技能绑库优先，否则取用户「已启用检索」的库集合。
-        """
-        overrides: dict[str, bool] = {}
-        if body.enable_knowledge is not None:
-            overrides["knowledge_search"] = body.enable_knowledge
-        if body.enable_memory is not None:
-            overrides["memory_search"] = body.enable_memory
-        if body.enable_web_search is not None:
-            overrides["web_search"] = body.enable_web_search
-
-        if skill and (skill.tool_keys or []):
-            from app.core.agent.tools.base import BUILTIN_REGISTRY
-
-            whitelist = set(skill.tool_keys)
-            for key in BUILTIN_REGISTRY:
-                overrides[key] = key in whitelist
-
-        from app.repositories.knowledge_base_repository import (
-            KnowledgeBaseRepository,
-        )
-
-        if skill and skill.kb_id:
-            kb_ids: list[str] | None = [str(skill.kb_id)]
-        else:
-            kb_ids = await KnowledgeBaseRepository(self.session).list_chat_enabled_ids(
-                user_id
+        # ④ 角色记忆工具提示
+        if persona and persona.memory_text is not None:
+            parts.append(
+                "你可以使用「保存到角色记忆」工具记录对话中的重要信息（用户偏好、习惯、计划等），"
+                "这些记忆会在未来的对话中自动加载，帮助你更好地了解用户。"
             )
-        return overrides, kb_ids
 
-    async def _build_tools(
-        self,
-        user_id: uuid.UUID,
-        agent: AgentConfig | None,
-        body: ChatStreamRequest,
-        citations: list[dict],
-        stats_holder: dict[str, dict],
-        skill=None,
-    ) -> list:
-        """构建启用的工具列表（无状态 MCP 版本，保留备用）。
-
-        工具启停统一由「工具配置页」(tool_configs) 管理，这里不再读 agent 的工具开关；
-        仅把对话页本轮的临时开关（如联网）作为 override 传入，优先级最高。
-        """
-        overrides, kb_ids = await self._tool_scope(user_id, body, skill)
-        return await build_enabled_tools(
-            self.session,
-            user_id,
-            citations,
-            overrides,
-            stats_holder=stats_holder,
-            kb_ids=kb_ids,
-        )
+        return "\n\n".join(parts)
 
     async def stream_chat(
         self, user_id: uuid.UUID, body: ChatStreamRequest, skip_user_message: bool = False
@@ -371,7 +331,9 @@ class ChatService:
         try:
             async with SessionLocal() as session:
                 svc = ChatService(session)
-                conv = await svc._ensure_conversation(user_id, body)
+                # 预加载 persona 用于 conversation scope
+                _persona = await svc.persona_repo.get_active(user_id)
+                conv = await svc._ensure_conversation(user_id, body, _persona)
                 cid = str(conv.id)
                 title = conv.title
                 if not skip_user_message:
@@ -408,7 +370,8 @@ class ChatService:
             if await bus.acquire_turn_lock(cid):
                 task = asyncio.create_task(
                     self._run_chat_turn_bg(
-                        user_id, conv_uuid, body, attachments, skip_user_message
+                        user_id, conv_uuid, body, attachments, skip_user_message,
+                        persona_id=_persona.id if _persona else None,
                     )
                 )
                 _BG_TASKS.add(task)
@@ -498,6 +461,7 @@ class ChatService:
         body: ChatStreamRequest,
         attachments: list[dict],
         skip_user_message: bool,
+        persona_id: uuid.UUID | None = None,
     ) -> None:
         """后台生成任务：用独立 session 跑问答，逐 token 广播到频道 + 写续传缓冲，
         完成后落库 assistant 消息并派发副作用（记忆/图片/情绪），最后广播 done。
@@ -525,12 +489,17 @@ class ChatService:
 
         try:
             tracer = get_tracer()
-            # 对话主任务包一层 trace,便于在「执行轨迹」页查看整个对话回合的工具调用/LLM/耗时/成本
+            # 预加载 persona 用于 trace 属性
+            _pre_persona = await self.persona_repo.get_active(user_id)
             async with tracer.trace(
                 user_id=user_id,
                 task_type="chat",
                 task_id=conv_id,
                 task_name=(user_text[:120] or "(空)"),
+                persona_id=_pre_persona.id if _pre_persona else None,
+                attributes={
+                    "persona_name": _pre_persona.name if _pre_persona else None,
+                } if _pre_persona else {},
             ) as tctx:
                 # 给前端发个 trace_id(可用作未来「查看执行轨迹」按钮)
                 await bus.publish(cid, "trace", {"trace_id": str(tctx.trace_id)})
@@ -599,6 +568,7 @@ class ChatService:
                             conversation_id=conv_id,
                             role=ROLE_ASSISTANT,
                             content=full_text,
+                            sender_persona_id=persona_id,
                             meta_data={
                                 "citations": citations,
                                 "tool_calls": tool_calls,
@@ -640,42 +610,63 @@ class ChatService:
         attachments: list[dict],
         citations: list[dict],
     ) -> AsyncGenerator[dict, None]:
-        """问答生成核心：组装 prompt/工具 → 按强弱模型/多模态分流 → 产出统一事件字典。
+        """问答生成核心：按角色 Agent 组装 prompt/工具 → 按强弱模型/多模态分流。
 
         事件类型：token / tool_call|tool_start / tool_result / final / citation。
         citations 由调用方传入，工具执行时回写；生成末尾再以 citation 事件吐出。
         """
         user_text = body.message.strip()
-        agent = await self.agent_repo.get_by_user(user_id)
         persona = await self.persona_repo.get_active(user_id)
         temperature = persona.temperature if persona else 0.7
-        skill = None
-        if body.skill_id:
-            skill = await self.skill_repo.get(user_id, body.skill_id)
+
+        # 组装技能列表：角色下所有 enabled=true 的技能自动挂载
+        auto_skills: list = []
+        if persona:
+            all_skills = await self.skill_repo.list_by_persona(persona.id)
+            auto_skills = [s for s in all_skills if s.enabled]
+        # 对话临时覆盖：body.skill_id 如果传了，替换同 id 的自动挂载技能，否则只启用这一个
+        override_skill = None
+        if body.skill_id and persona:
+            try:
+                override_skill = await self.skill_repo.get(
+                    persona.id, uuid.UUID(str(body.skill_id))
+                )
+            except (ValueError, TypeError):
+                pass
+        active_skills = list(auto_skills)
+        if override_skill is not None:
+            replaced = False
+            for i, s in enumerate(active_skills):
+                if s.id == override_skill.id:
+                    active_skills[i] = override_skill
+                    replaced = True
+                    break
+            if not replaced:
+                active_skills = [override_skill]
+
         model, config = await build_default_chat_model(
             self.session, user_id, temperature=temperature, streaming=True
         )
-        base_prompt = self._compose_system_prompt(persona, skill)
+        base_prompt = self._compose_system_prompt(persona, active_skills)
         stats_holder: dict[str, dict] = {}
         composed_text = _compose_with_attachments(user_text, attachments)
 
         from app.core.agent.context_hint import current_context_block
 
         async def _assemble_prompt(has_tools: bool) -> str:
-            """组装 system prompt：人设/技能 + 时效引导 + 主动召回 + 跨会话 + 真人模式。
+            """组装完整 system prompt：基础(人设+记忆+技能) + 时效 + 召回 + 跨会话 + 真人模式。
 
-            真人模式把「真人聊天风格」放到**最末尾**：越靠后的指令权重越大，
-            放最后才不会被前面的背景信息块（已知记忆/跨会话/时效引导）冲淡回助手腔。
+            真人模式放最末尾——越靠后的指令权重越大，不会被前面的背景块冲淡。
             """
-            human = agent is not None and agent.human_mode
+            human = persona is not None and persona.human_mode
             sp = (
                 base_prompt + "\n\n" + current_context_block(with_tool_hint=has_tools)
             ).strip()
-            if agent is None or agent.enable_active_recall:
+            if persona is None or persona.enable_active_recall:
                 recall = await self._recall_lagged(user_id, user_text)
                 if recall:
                     sp = (sp + "\n\n" + recall).strip()
-            if agent is not None and agent.enable_cross_session:
+            if persona is not None and persona.enable_cross_session:
                 cross = await self._cross_session_context(user_id, conv.id)
                 if cross:
                     sp = (sp + "\n\n" + cross).strip()
@@ -688,7 +679,6 @@ class ChatService:
         history = await self._history_messages(conv.id)
 
         if body.image_keys:
-            # 多模态输入：用多模态模型看图回答（不走工具编排，无需 MCP 会话）
             system_prompt = await _assemble_prompt(has_tools=False)
             async for token in self._stream_multimodal(
                 user_id, system_prompt, history, composed_text, body.image_keys
@@ -698,17 +688,82 @@ class ChatService:
                 yield {"type": "citation", "citations": citations}
             return
 
-        # 非多模态：构建工具（内置 + 带 TTL 缓存的 MCP 工具清单）并跑编排。
-        # 用无状态 build_enabled_tools（而非每轮预开 MCP 会话的 _cm 版）：MCP 工具清单走
-        # 进程内缓存、不预握手，只有模型真正调用某个 MCP 工具时才连接——闲聊/只用内置工具
-        # 的轮次零 MCP 握手，大幅降低首字延迟。
-        overrides, kb_ids = await self._tool_scope(user_id, body, skill)
+        # 工具开关：角色配置为底，对话页临时覆盖优先
+        overrides: dict[str, bool] = {}
+        if persona:
+            overrides["knowledge_search"] = persona.enable_knowledge
+            overrides["memory_search"] = persona.enable_memory
+            overrides["web_search"] = persona.enable_web_search
+        if body.enable_knowledge is not None:
+            overrides["knowledge_search"] = body.enable_knowledge
+        if body.enable_memory is not None:
+            overrides["memory_search"] = body.enable_memory
+        if body.enable_web_search is not None:
+            overrides["web_search"] = body.enable_web_search
+
+        # 知识库范围：角色配置优先，body 覆盖
+        kb_ids = list(persona.kb_ids) if persona and persona.kb_ids else None
+        if body.kb_ids is not None:
+            kb_ids = list(body.kb_ids)
+
+        # 技能工具白名单叠加（取并集限制——所有技能的白名单取交集？不，应该是任一技能允许的工具就允许）
+        skill_tool_keys: list[str] | None = None
+        if active_skills:
+            all_tool_keys: set[str] = set()
+            for s in active_skills:
+                if s.tool_keys:
+                    all_tool_keys.update(s.tool_keys)
+            if all_tool_keys:
+                skill_tool_keys = list(all_tool_keys)
+
+        # 注入当前 persona_id 供 save_to_persona_memory 工具使用
+        from app.core.agent.tools.builtin.persona_memory import set_current_persona
+        set_current_persona(str(persona.id) if persona else None)
+
         tools = await build_enabled_tools(
             self.session, user_id, citations, overrides, stats_holder, kb_ids
         )
+        # 技能白名单过滤
+        if skill_tool_keys and tools:
+            tools = [t for t in tools if t.name in skill_tool_keys]
+
+        # 附加技能脚本工具
+        for s in active_skills:
+            if s.storage_path and s.config.get("tools"):
+                try:
+                    from app.core.agent.tools.skill_executor import build_skill_tools
+                    import asyncio as _asyncio
+
+                    # 技能调用计数：fire-and-forget，不阻塞工具执行
+                    def _bump(sid):
+                        try:
+                            loop = _asyncio.get_event_loop()
+                            if loop.is_running():
+                                loop.create_task(_bump_async(sid))
+                        except Exception:
+                            pass
+
+                    async def _bump_async(sid):
+                        try:
+                            from app.db.postgres import SessionLocal
+                            from app.repositories.skill_repository import SkillRepository
+                            async with SessionLocal() as s2:
+                                await SkillRepository(s2).bump_call_count(sid)
+                        except Exception:
+                            pass
+
+                    st = build_skill_tools(
+                        skill_id=s.id,
+                        skill_config=s.config,
+                        skill_dir=s.storage_path,
+                        record_call=_bump,
+                    )
+                    tools.extend(st)
+                except Exception as e:
+                    logger.warning("构建技能工具失败: skill=%s err=%s", s.id, e)
+
         system_prompt = await _assemble_prompt(has_tools=bool(tools))
         if not tools:
-            # 无工具：纯流式
             lc_messages: list = []
             if system_prompt:
                 lc_messages.append(SystemMessage(content=system_prompt))
@@ -718,7 +773,6 @@ class ChatService:
                 if chunk.content:
                     yield {"type": "token", "text": chunk.content}
         elif supports_function_call(config):
-            # 强模型：原生 function calling
             lc_messages = []
             if system_prompt:
                 lc_messages.append(SystemMessage(content=system_prompt))
@@ -729,7 +783,6 @@ class ChatService:
             ):
                 yield ev
         else:
-            # 弱模型：ReAct
             async for ev in run_react(
                 model, tools, composed_text, history, system_prompt,
                 stats_holder=stats_holder,

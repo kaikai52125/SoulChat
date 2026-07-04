@@ -100,7 +100,7 @@ async def search_songs(keyword: str, *, limit: int = 10) -> list[dict]:
     return results
 
 
-async def fetch_audio_url(content_id: str) -> str | None:
+async def fetch_audio_url(content_id: str, copyright_id: str = "0") -> str | None:
     """取免费试听音源直链。
 
     对每种音质调 listenSong，免费歌会 302 重定向到 freetyst 的 mp3 地址，
@@ -109,6 +109,7 @@ async def fetch_audio_url(content_id: str) -> str | None:
     cid = (content_id or "").strip()
     if not cid:
         return None
+    crid = (copyright_id or "0").strip()
     for tone in _TONE_FLAGS:
         params = {
             "toneFlag": tone,
@@ -116,7 +117,7 @@ async def fetch_audio_url(content_id: str) -> str | None:
             "userId": "15548614588710179085069",
             "ua": "Android_migu",
             "version": "5.1",
-            "copyrightId": "0",
+            "copyrightId": crid,
             "contentId": cid,
             "resourceType": "2",
             "channel": "0",
@@ -166,7 +167,10 @@ async def enrich_by_keyword(keyword: str) -> dict:
     if not hits:
         return empty
     top = hits[0]
-    audio_url = await fetch_audio_url(top.get("content_id", ""))
+    audio_url = await fetch_audio_url(
+        top.get("content_id", ""),
+        top.get("copyright_id", "0"),
+    )
     return {
         "title": top.get("title"),
         "artist": top.get("artist"),

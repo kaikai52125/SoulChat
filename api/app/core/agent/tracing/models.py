@@ -46,6 +46,7 @@ class TraceRecord(BaseModel):
 
     trace_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     user_id: uuid.UUID
+    persona_id: uuid.UUID | None = None
     task_type: str
     task_id: uuid.UUID | None = None
     task_name: str | None = None

@@ -2646,6 +2646,142 @@ body {
   text-align: center;
 }
 
+/* 角色卡片网格 */
+.persona-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .persona-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .persona-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 页面头部 */
+.persona-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+/* 区块标题 */
+.persona-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #344054;
+}
+
+/* 场景卡片（内置/自定义卡组） */
+.persona-scene-card {
+  position: relative;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #ececf0;
+  padding: 18px;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.persona-scene-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 30px rgba(16, 24, 40, 0.10);
+}
+.persona-scene-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.persona-scene-icon {
+  font-size: 32px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.persona-scene-info {
+  flex: 1;
+  min-width: 0;
+}
+.persona-scene-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: #1d2129;
+}
+.persona-scene-desc {
+  font-size: 12px;
+  color: #98a2b3;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.persona-scene-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 字段提示 */
+.persona-field-tip {
+  font-size: 12px;
+  color: #98a2b3;
+}
+
+/* 丝绸按钮（与模型页一类的轻量操作按钮） */
+.btn-silk-plain {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  width: 36px;
+  padding: 0;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  background: #fff;
+  color: #344054;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.btn-silk-plain:hover {
+  border-color: #155eef;
+  box-shadow: 0 0 0 3px rgba(21, 94, 239, 0.08);
+}
+.btn-silk-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #155eef 0%, #4e8cff 100%);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s, box-shadow 0.2s;
+}
+.btn-silk-primary:hover {
+  box-shadow: 0 4px 14px rgba(21, 94, 239, 0.35);
+}
+.btn-silk-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* 对话气泡头像 */
 .chat-avatar {
   width: 38px;

@@ -162,16 +162,29 @@ class SpanRecorder:
             raise
 
     async def _flush(self, events: list[_SpanEvent]) -> None:
-        """把一批事件落库。"""
+        """把一批事件落库。trace 先 flush 避免 span FK 约束失败。"""
         async for session in get_session():
+            # 第一步：trace_create 先 flush，确保 span 插入时 FK 存在
             for ev in events:
                 if ev.kind == "trace_create" and ev.trace:
                     session.add(_trace_to_orm(ev.trace))
-                elif ev.kind == "span_create" and ev.span:
-                    session.add(_span_to_orm(ev.span))
-                elif ev.kind == "trace_update" and ev.trace:
+            if any(ev.kind == "trace_create" for ev in events):
+                await session.flush()
+
+            # 第二步：span 插入
+            span_events = [ev for ev in events if ev.kind == "span_create" and ev.span]
+            for ev in span_events:
+                session.add(_span_to_orm(ev.span))
+
+            # 第三步：trace_update
+            for ev in events:
+                if ev.kind == "trace_update" and ev.trace:
                     await _update_trace(session, ev.trace)
-            await session.commit()
+
+            try:
+                await session.commit()
+            except Exception as e:
+                logger.warning("SpanRecorder flush 失败,本批 %d 条丢弃: %s", len(events), e)
             break
 
 
@@ -182,6 +195,7 @@ def _trace_to_orm(t: TraceRecord) -> AgentTrace:
         id=t.trace_id,
         trace_id=t.trace_id,
         user_id=t.user_id,
+        persona_id=t.persona_id,
         task_type=t.task_type,
         task_id=t.task_id,
         task_name=t.task_name,

@@ -3,7 +3,6 @@
 任何模块导入 app.models 即可让全部表与外键关系正确注册，
 避免在 Celery worker 等场景因模型未全部加载导致外键解析失败。
 """
-from app.models.agent_config_model import AgentConfig
 from app.models.agent_persona_model import AgentPersona
 from app.models.agent_task_model import AgentTask
 from app.models.agent_trace_model import AgentSpan, AgentTrace
@@ -34,7 +33,6 @@ from app.models.tool_config_model import ToolConfig
 from app.models.user_model import User
 
 __all__ = [
-    "AgentConfig",
     "AgentPersona",
     "AgentTask",
     "AgentSpan",

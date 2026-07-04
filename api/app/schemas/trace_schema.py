@@ -40,6 +40,8 @@ class TraceListItem(BaseModel):
     task_type: str
     task_id: uuid.UUID | None
     task_name: str | None
+    persona_id: uuid.UUID | None = None
+    attributes: dict[str, Any] = {}
     status: str
     error_message: str | None = None
     started_at: datetime
@@ -66,6 +68,7 @@ class TraceDetail(BaseModel):
     task_type: str
     task_id: uuid.UUID | None
     task_name: str | None
+    persona_id: uuid.UUID | None = None
     status: str
     error_message: str | None = None
     started_at: datetime

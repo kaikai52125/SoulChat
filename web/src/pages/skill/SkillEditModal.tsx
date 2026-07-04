@@ -6,6 +6,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Tag,
   message as antdMessage,
 } from 'antd'
@@ -16,6 +17,7 @@ import { useKnowledgeBaseStore } from '@/stores/knowledgeBaseStore'
 
 interface Props {
   open: boolean
+  personaId: string
   skill: Skill | null // null = 新建
   onClose: () => void
   onSaved: () => void
@@ -24,7 +26,7 @@ interface Props {
 // 常用图标候选（emoji）
 const ICONS = ['🧩', '📄', '🔍', '📝', '🌐', '💡', '🧠', '⚙️', '🎯', '📚', '✍️', '🗂️']
 
-export default function SkillEditModal({ open, skill, onClose, onSaved }: Props) {
+export default function SkillEditModal({ open, personaId, skill, onClose, onSaved }: Props) {
   const [name, setName] = useState('')
   const [icon, setIcon] = useState('🧩')
   const [description, setDescription] = useState('')
@@ -33,8 +35,8 @@ export default function SkillEditModal({ open, skill, onClose, onSaved }: Props)
   const [kbId, setKbId] = useState<string | null>(null)
   const [quickPrompts, setQuickPrompts] = useState<string[]>([])
   const [enabled, setEnabled] = useState(true)
+  const [isPublic, setIsPublic] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [optimizing, setOptimizing] = useState(false)
   const [tools, setTools] = useState<ToolItem[]>([])
 
   const kbList = useKnowledgeBaseStore((s) => s.list)
@@ -50,6 +52,7 @@ export default function SkillEditModal({ open, skill, onClose, onSaved }: Props)
       setKbId(skill?.kb_id ?? null)
       setQuickPrompts(skill?.config?.quick_prompts ?? [])
       setEnabled(skill?.enabled ?? true)
+      setIsPublic(skill?.is_public ?? false)
       ensureKbLoaded()
       // 工具列表（白名单候选）：只取内置工具
       toolsApi
@@ -68,21 +71,7 @@ export default function SkillEditModal({ open, skill, onClose, onSaved }: Props)
     setQuickPrompts((prev) => prev.filter((_, i) => i !== idx))
 
   const onOptimize = async () => {
-    const raw = prompt.trim()
-    if (!raw) {
-      antdMessage.warning('请先填写任务提示词')
-      return
-    }
-    setOptimizing(true)
-    try {
-      const { data } = await skillApi.optimizePrompt(raw)
-      setPrompt(data.optimized)
-      antdMessage.success('已优化，可继续微调')
-    } catch (e) {
-      antdMessage.error((e as Error).message)
-    } finally {
-      setOptimizing(false)
-    }
+    antdMessage.info('提示词优化功能将在后续版本恢复')
   }
 
   const onSave = async () => {
@@ -98,6 +87,7 @@ export default function SkillEditModal({ open, skill, onClose, onSaved }: Props)
       tool_keys: toolKeys,
       kb_id: kbId ?? '',
       enabled,
+      is_public: isPublic,
       config: {
         quick_prompts: quickPrompts.map((p) => p.trim()).filter(Boolean),
         few_shots: skill?.config?.few_shots ?? [],
@@ -106,10 +96,10 @@ export default function SkillEditModal({ open, skill, onClose, onSaved }: Props)
     setSaving(true)
     try {
       if (skill) {
-        await skillApi.update(skill.id, payload)
+        await skillApi.update(personaId, skill.id, payload)
         antdMessage.success('已保存')
       } else {
-        await skillApi.create(payload)
+        await skillApi.create(personaId, payload)
         antdMessage.success('已创建')
       }
       onSaved()
@@ -174,7 +164,6 @@ export default function SkillEditModal({ open, skill, onClose, onSaved }: Props)
             size="small"
             type="link"
             icon={<ThunderboltOutlined />}
-            loading={optimizing}
             onClick={onOptimize}
             style={{ padding: 0 }}
           >
@@ -251,6 +240,11 @@ export default function SkillEditModal({ open, skill, onClose, onSaved }: Props)
           添加快捷提问
         </Button>
       </Space>
+
+      <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>发布到技能市场</span>
+        <Switch checked={isPublic} onChange={setIsPublic} size="small" />
+      </div>
 
       {skill?.is_builtin && (
         <div style={{ marginTop: 14 }}>

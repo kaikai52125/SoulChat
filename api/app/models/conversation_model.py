@@ -28,6 +28,13 @@ class Conversation(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     title: Mapped[str] = mapped_column(String(256), default="新对话")
+    # 会话归属的角色（conversation_scope='isolated' 时自动关联，shared 则为空）
+    persona_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_personas.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # 是否群聊会话（多角色卡）。普通单聊为 false。
     is_group: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     # 群成员角色卡 id 列表（仅 is_group=true 时有意义）。

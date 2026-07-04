@@ -37,6 +37,8 @@ class ChatStreamRequest(BaseModel):
     enable_knowledge: bool | None = None
     enable_memory: bool | None = None
     enable_web_search: bool | None = None
+    # 本轮知识库范围（覆盖角色默认），None 表示用角色配置
+    kb_ids: list[str] | None = None
 
 
 class FeedbackRequest(BaseModel):

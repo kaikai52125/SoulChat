@@ -30,11 +30,15 @@ function acquire(src: string): Promise<string> {
   if (!entry) {
     const promise = (async () => {
       const token = localStorage.getItem('access_token')
-      const headers: Record<string, string> = token
-        ? { Authorization: `Bearer ${token}` }
-        : {}
+      // 没有 token 不发起请求，直接回退，避免无意义的 401 日志
+      if (!token) {
+        throw new Error('未登录，跳过鉴权图片请求')
+      }
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
       const resp = await fetch(src, { headers })
       if (!resp.ok) {
+        // 失败时清除缓存条目，下次渲染时用新 token 重试
+        blobCache.delete(src)
         throw new Error(`图片加载失败: ${resp.status}`)
       }
       const blob = await resp.blob()

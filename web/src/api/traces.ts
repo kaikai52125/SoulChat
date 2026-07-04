@@ -28,6 +28,8 @@ export interface TraceListItem {
   task_type: string
   task_id: string | null
   task_name: string | null
+  persona_id: string | null
+  attributes: Record<string, unknown>
   status: 'running' | 'ok' | 'error'
   error_message: string | null
   started_at: string

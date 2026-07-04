@@ -22,8 +22,6 @@ import {
   ShareAltOutlined,
   StarOutlined,
   TeamOutlined,
-  ThunderboltOutlined,
-  ToolOutlined,
   UserOutlined,
   UsergroupAddOutlined,
 } from '@ant-design/icons'
@@ -79,8 +77,6 @@ const menuItems = [
     children: [
       { key: '/settings/models', icon: <SettingOutlined />, label: '模型配置' },
       { key: '/settings/agent', icon: <RobotOutlined />, label: '角色配置' },
-      { key: '/settings/skills', icon: <ThunderboltOutlined />, label: '技能' },
-      { key: '/settings/tools', icon: <ToolOutlined />, label: '工具配置' },
       { key: '/settings/notify', icon: <BellOutlined />, label: '消息推送' },
     ],
   },

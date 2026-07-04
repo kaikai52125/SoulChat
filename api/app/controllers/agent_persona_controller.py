@@ -1,4 +1,4 @@
-"""对话人格（角色卡）路由：CRUD + 设为当前生效。"""
+"""对话人格（角色）路由：CRUD + 设为当前生效。角色 = Agent 完整配置。"""
 import uuid
 
 from fastapi import APIRouter, Depends
@@ -68,3 +68,15 @@ async def activate_persona(
     service = AgentPersonaService(session)
     persona = await service.activate(user.id, persona_id)
     return success(service.to_out_dict(persona), "已切换")
+
+
+@router.get("/{persona_id}/stats")
+async def persona_stats(
+    persona_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """角色使用统计：对话数、回复数、工具调用次数、成本、技能等。"""
+    service = AgentPersonaService(session)
+    stats = await service.get_stats(user.id, persona_id)
+    return success(stats)

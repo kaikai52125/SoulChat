@@ -38,24 +38,37 @@ _EMBED_CONCURRENCY = max(1, int(os.getenv("EMBED_CONCURRENCY", "8")))
 
 # 进程级共享 HTTP 客户端：复用连接池，避免每次请求重建 TCP/TLS。
 # 评测上万次嵌入调用时，握手开销累积可观，复用后显著提速。
+# 但 Celery 每个任务用独立事件循环，复用时需检测循环是否变更。
 _shared_client: httpx.AsyncClient | None = None
+_shared_client_loop_id: int | None = None
 
 
 def _get_shared_client() -> httpx.AsyncClient:
-    global _shared_client
-    if _shared_client is None or _shared_client.is_closed:
+    global _shared_client, _shared_client_loop_id
+    try:
+        loop = asyncio.get_event_loop()
+        current_id = id(loop)
+    except RuntimeError:
+        current_id = -1
+    if (
+        _shared_client is None
+        or _shared_client.is_closed
+        or _shared_client_loop_id != current_id
+    ):
         _shared_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
         )
+        _shared_client_loop_id = current_id
     return _shared_client
 
 
 async def close_llm_client() -> None:
     """关闭共享 HTTP 客户端（应用/评测退出时调用）。"""
-    global _shared_client
+    global _shared_client, _shared_client_loop_id
     if _shared_client is not None and not _shared_client.is_closed:
         await _shared_client.aclose()
     _shared_client = None
+    _shared_client_loop_id = None
 
 
 async def _post_with_retry(

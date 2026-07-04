@@ -7,7 +7,6 @@ import {
   Popconfirm,
   Popover,
   Space,
-  Switch,
   Tooltip,
   Upload,
   message as antdMessage,
@@ -17,7 +16,6 @@ import {
   DeleteOutlined,
   DownOutlined,
   FileTextOutlined,
-  GlobalOutlined,
   CloseOutlined,
   PaperClipOutlined,
   PictureOutlined,
@@ -48,7 +46,6 @@ import { groupConversationsByDate } from './chat/groupByDate'
 import { useMusicStore } from '@/stores/musicStore'
 import { useChatHeaderStore } from '@/stores/chatHeaderStore'
 import { personaApi } from '@/api/personas'
-import { agentConfigApi } from '@/api/agentConfig'
 import { authApi } from '@/api/auth'
 import { useSkillStore } from '@/stores/skillStore'
 
@@ -61,7 +58,6 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
-  const [webSearch, setWebSearch] = useState(false)
   const [activeSkillId, setActiveSkillId] = useState<string | null>(null)
   const [pendingImages, setPendingImages] = useState<{ key: string; url: string }[]>([])
   const [pendingFiles, setPendingFiles] = useState<
@@ -80,16 +76,16 @@ export default function ChatPage() {
   const [shareOpen, setShareOpen] = useState(false)
   // 播放器可见时，输入区在手机上需上移避让
   const playerVisible = useMusicStore((s) => s.visible)
-  // 技能（任务能力包）：对话中可挂载/切换
+  // 技能：从当前激活角色加载，角色切换时自动刷新
+  const skillStore = useSkillStore()
   const skills = useSkillStore((s) => s.list)
-  const ensureSkillsLoaded = useSkillStore((s) => s.ensureLoaded)
-  useEffect(() => {
-    ensureSkillsLoaded()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
   const activeSkill = skills.find((s) => s.id === activeSkillId) ?? null
-  // 只在对话框技能选择器展示「已开启显示」的技能，避免技能多时拥挤
   const visibleSkills = skills.filter((s) => s.enabled)
+  // 当 activeId 变化时重新加载该角色的技能
+  useEffect(() => {
+    if (activeId) skillStore.loadForPersona(activeId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId])
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)')
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
@@ -241,18 +237,17 @@ export default function ChatPage() {
   // 加载对话头像上下文：当前角色头像 + 用户头像 + 显示开关
   const loadAvatars = async () => {
     try {
-      const [pResp, cResp, meResp] = await Promise.all([
+      const [pResp, meResp] = await Promise.all([
         personaApi.list(),
-        agentConfigApi.get(),
         authApi.me(),
       ])
       const active = pResp.data.find((p) => p.is_active)
       setAvatars({
-        show: cResp.data.show_avatar,
+        show: active?.show_avatar ?? false,
         personaName: active?.name,
         personaAvatarUrl: active?.avatar_url ?? null,
         userAvatarUrl: meResp.data.avatar ?? null,
-        humanMode: cResp.data.human_mode,
+        humanMode: active?.human_mode ?? false,
       })
     } catch {
       // 头像信息拉取失败不影响对话
@@ -261,21 +256,6 @@ export default function ChatPage() {
 
   useEffect(() => {
     loadAvatars()
-  }, [])
-
-  // 读取联网搜索工具的默认启停（来自「工具配置」），作为对话联网开关默认值
-  useEffect(() => {
-    import('@/api/tools').then(({ toolsApi }) => {
-      toolsApi
-        .list()
-        .then(({ data }) => {
-          const web = data.find((t) => t.tool_key === 'web_search')
-          if (web) setWebSearch(web.enabled)
-        })
-        .catch(() => {
-          // 取配置失败则保持默认关闭，不影响对话
-        })
-    })
   }, [])
 
   // 收藏深链：?conversation=&message= 打开会话并定位消息
@@ -700,7 +680,6 @@ export default function ChatPage() {
         greeting: pendingGreetingRef.current,
         imageKeys: imgs.map((i) => i.key),
         attachments: files,
-        enableWebSearch: webSearch,
       },
       {
         onMeta: (d) => {
@@ -1096,22 +1075,6 @@ export default function ChatPage() {
                             文档
                           </Button>
                         </Upload>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '4px 8px',
-                          }}
-                        >
-                          <span>
-                            <GlobalOutlined
-                              style={{ marginRight: 6, color: webSearch ? '#155EEF' : '#98A2B3' }}
-                            />
-                            联网搜索
-                          </span>
-                          <Switch size="small" checked={webSearch} onChange={setWebSearch} />
-                        </div>
                       </div>
                     }
                   >
@@ -1119,7 +1082,7 @@ export default function ChatPage() {
                       type="text"
                       shape="circle"
                       icon={<PlusOutlined style={{ fontSize: 18 }} />}
-                      style={{ flexShrink: 0, color: webSearch ? '#155EEF' : undefined }}
+                      style={{ flexShrink: 0 }}
                     />
                   </Popover>
                   <VoiceInputButton
@@ -1191,21 +1154,6 @@ export default function ChatPage() {
                           <Button type="text" icon={<PaperClipOutlined style={{ fontSize: 19 }} />} />
                         </Tooltip>
                       </Upload>
-                      <Tooltip title="联网搜索">
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            height: 32,
-                          }}
-                        >
-                          <GlobalOutlined
-                            style={{ fontSize: 18, color: webSearch ? '#155EEF' : '#98A2B3' }}
-                          />
-                          <Switch size="small" checked={webSearch} onChange={setWebSearch} />
-                        </span>
-                      </Tooltip>
                       <VoiceInputButton
                         onResult={(t) => setInput((prev) => (prev ? prev + ' ' + t : t))}
                       />
