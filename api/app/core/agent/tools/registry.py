@@ -68,29 +68,26 @@ async def build_enabled_tools(
     overrides: dict[str, bool] | None = None,
     stats_holder: dict[str, dict] | None = None,
     kb_ids: list[str] | None = None,
+    enable_mcp: bool = False,
+    mcp_server_ids: list[str] | None = None,
 ) -> list[BaseTool]:
-    """构建用户当前启用的工具列表（内置 + MCP，MCP 为无状态版本，每次调用新建连接）。
+    """构建用户当前启用的工具列表（内置 + 可选 MCP）。
 
-    保留给不便用上下文管理器的场景；问答/群聊生成请用 build_enabled_tools_cm（持久会话，省握手）。
-
-    overrides: {tool_key: bool} 本轮临时开关（对话请求传入），优先级最高。
-    citations: 引用收集器，传给知识库工具。
-    stats_holder: 工具统计回写（按工具 key 索引），由调用方持有，orchestrator 读后用于
-        填充 tool_result 事件的 stats 字段（命中数/网页数等）。
-    kb_ids: 知识库检索范围（已启用检索的库 id 列表），传给知识库工具；None=不限全部库。
+    mcp_server_ids: 非空时只加载指定 ID 的 MCP Server（角色级过滤）。
     """
     tools = await _build_builtin_tools(
         session, user_id, citations, overrides, stats_holder, kb_ids
     )
-    # MCP 工具（⑥-B 接入，无状态版本）
-    try:
-        from app.core.agent.tools.mcp.loader import build_mcp_tools
+    if enable_mcp:
+        try:
+            from app.core.agent.tools.mcp.loader import build_mcp_tools
 
-        tools.extend(await build_mcp_tools(session, user_id))
-    except ImportError:
-        pass  # MCP 模块未就绪
-    except Exception as e:
-        logger.warning("构建 MCP 工具失败（忽略）: %s", e)
+            mcp_tools = await build_mcp_tools(session, user_id, server_ids=mcp_server_ids)
+            tools.extend(mcp_tools)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning("构建 MCP 工具失败（忽略）: %s", e)
 
     return tools
 

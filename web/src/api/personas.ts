@@ -22,6 +22,7 @@ export interface Persona {
   enable_memory: boolean
   enable_web_search: boolean
   enable_mcp: boolean
+  mcp_server_ids: string[]
   enable_active_recall: boolean
   enable_cross_session: boolean
   kb_ids: string[]
@@ -42,6 +43,7 @@ export interface PersonaPayload {
   enable_memory?: boolean
   enable_web_search?: boolean
   enable_mcp?: boolean
+  mcp_server_ids?: string[]
   enable_active_recall?: boolean
   enable_cross_session?: boolean
   kb_ids?: string[]
@@ -78,6 +80,7 @@ export interface PersonaStats {
   conversations: number
   messages: number
   tool_calls: number
+  mcp_calls: number
   traces: number
   total_cost_cny: number
   skills: number

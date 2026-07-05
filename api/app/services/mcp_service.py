@@ -42,25 +42,26 @@ class MCPService:
 
     @staticmethod
     def _encrypt_auth(auth_type: str, auth_config: dict | None) -> dict | None:
-        """把明文认证信息加密入库。"""
+        """把明文认证信息加密入库。auth_config 为 None 时跳过（市场模板先创建后补）。"""
+        if auth_config is None:
+            return None
         if auth_type == AUTH_BEARER:
-            token = (auth_config or {}).get("token")
+            token = auth_config.get("token")
             if not token:
                 raise BizError("Bearer 认证需提供 token", code=4051)
             return {"token": encrypt_secret(token)}
         if auth_type == AUTH_API_KEY:
-            cfg = auth_config or {}
-            key = cfg.get("key")
+            key = auth_config.get("key")
             if not key:
                 raise BizError("API Key 认证需提供 key", code=4052)
             return {
-                "header": cfg.get("header") or "X-API-Key",
+                "header": auth_config.get("header") or "X-API-Key",
                 "key": encrypt_secret(key),
             }
         return None
 
     async def create(
-        self, user_id: uuid.UUID, body: MCPServerCreate
+        self, user_id: uuid.UUID, body: MCPServerCreate,
     ) -> MCPServer:
         if await self.repo.get_by_name(user_id, body.name):
             raise BizError("同名 MCP 服务已存在", code=4053)

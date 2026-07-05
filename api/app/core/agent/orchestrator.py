@@ -207,7 +207,7 @@ async def run_function_calling(
                 tracer = get_tracer()
                 async with tracer.span(
                     f"工具:{name}",
-                    span_type="tool_call",
+                    span_type="mcp_call" if "__" in name else "tool_call",
                     attributes={
                         "soulchat.tool.name": name,
                         "soulchat.tool.query": str(query)[:200],
@@ -340,7 +340,7 @@ async def run_react(
             tracer = get_tracer()
             async with tracer.span(
                 f"工具:{tool_name}",
-                span_type="tool_call",
+                span_type="mcp_call" if "__" in tool_name else "tool_call",
                 attributes={
                     "soulchat.tool.name": tool_name,
                     "soulchat.tool.query": str(query)[:200],

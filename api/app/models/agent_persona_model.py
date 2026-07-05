@@ -51,9 +51,11 @@ class AgentPersona(Base):
     # 默认检索的知识库 id 列表，空 = 全部可用
     kb_ids: Mapped[list] = mapped_column(JSONB, default=list)
 
-    # ── 技能 ──
+    # ── 技能 / MCP ──
     # 该角色选用的技能 id 列表（引用 skills 表），切换角色时自动挂载
     skill_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    # 该角色选用的 MCP Server id 列表，空=全部可用，非空=只用这些
+    mcp_server_ids: Mapped[list] = mapped_column(JSONB, default=list)
 
     # ── 上下文管理 ──
     # 对话历史模式：'shared' = 所有对话可见；'isolated' = 仅本角色对话

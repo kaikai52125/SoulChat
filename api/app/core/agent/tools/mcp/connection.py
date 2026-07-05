@@ -20,13 +20,16 @@ SSE_READ_TIMEOUT = 60.0
 
 
 def is_safe_url(url: str) -> bool:
-    """SSRF 防护：仅允许 http/https 且非内网/本地地址。"""
+    """SSRF 防护：仅允许 http/https 且非内网/本地地址（localhost 除外）。"""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return False
     host = parsed.hostname
     if not host:
         return False
+    # 允许 localhost / 127.0.0.1（本地测试用）
+    if host in ("localhost", "127.0.0.1", "0.0.0.0"):
+        return True
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:

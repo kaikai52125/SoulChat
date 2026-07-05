@@ -23,7 +23,6 @@ import {
   RightOutlined,
   SendOutlined,
   ShareAltOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons'
 import {
   chatApi,
@@ -58,7 +57,6 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
-  const [activeSkillId, setActiveSkillId] = useState<string | null>(null)
   const [pendingImages, setPendingImages] = useState<{ key: string; url: string }[]>([])
   const [pendingFiles, setPendingFiles] = useState<
     { file_name: string; text: string }[]
@@ -78,12 +76,12 @@ export default function ChatPage() {
   const playerVisible = useMusicStore((s) => s.visible)
   // 技能：从当前激活角色加载，角色切换时自动刷新
   const skillStore = useSkillStore()
-  const skills = useSkillStore((s) => s.list)
-  const activeSkill = skills.find((s) => s.id === activeSkillId) ?? null
-  const visibleSkills = skills.filter((s) => s.enabled)
-  // 当 activeId 变化时重新加载该角色的技能
+  // 当 activeId 或角色变化时重新加载技能
   useEffect(() => {
-    if (activeId) skillStore.loadForPersona(activeId)
+    personaApi.list().then(({ data }) => {
+      const active = data.find((p) => p.is_active)
+      if (active) skillStore.loadForPersona(active.id)
+    }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId])
   useEffect(() => {
@@ -676,7 +674,6 @@ export default function ChatPage() {
       {
         conversationId: convId,
         message: text,
-        skillId: activeSkillId,
         greeting: pendingGreetingRef.current,
         imageKeys: imgs.map((i) => i.key),
         attachments: files,
@@ -946,69 +943,6 @@ export default function ChatPage() {
           }`}
         >
           <div className="chat-fluid" style={{ padding: '0 24px' }}>
-            {/* 技能选择器 + 快捷开场提问 */}
-            <div className="chat-skill-bar">
-              <Popover
-                trigger="click"
-                placement="topLeft"
-                content={
-                  <div className="chat-skill-menu">
-                    <div
-                      className={`chat-skill-opt${!activeSkillId ? ' active' : ''}`}
-                      onClick={() => setActiveSkillId(null)}
-                    >
-                      <span>🚫 不挂载技能</span>
-                    </div>
-                    {visibleSkills.length === 0 && (
-                      <div className="chat-skill-empty">
-                        还没有可用技能，去「技能」页创建或开启显示
-                      </div>
-                    )}
-                    {visibleSkills.map((s) => (
-                      <div
-                        key={s.id}
-                        className={`chat-skill-opt${
-                          activeSkillId === s.id ? ' active' : ''
-                        }`}
-                        onClick={() => setActiveSkillId(s.id)}
-                      >
-                        <span>
-                          {s.icon} {s.name}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                }
-              >
-                <button
-                  className={`chat-skill-trigger${activeSkill ? ' on' : ''}`}
-                >
-                  <ThunderboltOutlined />
-                  {activeSkill ? `${activeSkill.icon} ${activeSkill.name}` : '技能'}
-                </button>
-              </Popover>
-              {activeSkill && (
-                <button
-                  className="chat-skill-clear"
-                  onClick={() => setActiveSkillId(null)}
-                  title="卸载技能"
-                >
-                  <CloseOutlined />
-                </button>
-              )}
-              {/* 快捷开场提问：填进输入框待补充，不直接发送 */}
-              {activeSkill?.config?.quick_prompts?.map((qp, i) => (
-                <button
-                  key={i}
-                  className="chat-quick-prompt"
-                  disabled={sending}
-                  onClick={() => fillInput(qp)}
-                  title="填入输入框，可补充后发送"
-                >
-                  {qp}
-                </button>
-              ))}
-            </div>
             {pendingImages.length > 0 && (
               <Space wrap style={{ marginBottom: 10 }}>
                 {pendingImages.map((img, i) => (

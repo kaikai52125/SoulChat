@@ -72,21 +72,21 @@ export default function PersonaCard({
       </div>
 
       {/* 操作 */}
-      <div className="persona-actions">
+      <div className="persona-actions" onClick={(e) => e.stopPropagation()}>
         <Button
           type={active ? 'default' : 'primary'}
           size="small"
           icon={active ? <CheckOutlined /> : undefined}
           disabled={active}
           loading={activating}
-          onClick={() => onActivate(persona)}
+          onClick={(e) => { e.stopPropagation(); onActivate(persona) }}
           className="persona-apply-btn"
           block
         >
           {active ? '使用中' : '应用'}
         </Button>
         <Tooltip title="编辑">
-          <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(persona)} />
+          <Button size="small" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); onEdit(persona) }} />
         </Tooltip>
         <Popconfirm
           title="删除该角色？"

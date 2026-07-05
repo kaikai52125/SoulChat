@@ -30,7 +30,7 @@ _MAX_NAME_LEN = 64
 # 进程内 MCP 工具缓存：避免每轮对话都重连 server 拉工具清单（握手+协商耗时）。
 # key=user_id，value=(过期时间戳, server 指纹, 工具列表)。指纹变化（增删/改 server）即失效。
 _MCP_CACHE: dict[str, tuple[float, str, list[BaseTool]]] = {}
-_MCP_CACHE_TTL = 300.0  # 秒
+_MCP_CACHE_TTL = 60.0  # 秒（缩短以更快感知变更）
 
 
 def _servers_fingerprint(servers: list[MCPServer]) -> str:
@@ -68,21 +68,28 @@ def _rename(tool: BaseTool, prefix: str, seen: set[str]) -> None:
 
 
 async def build_mcp_tools(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, server_ids: list[str] | None = None,
 ) -> list[BaseTool]:
     """构建该用户所有已启用 MCP server 的工具列表（名称清洗+去重）。
 
-    带进程内 TTL 缓存：server 配置未变（指纹一致）且未过期时复用，避免每轮重连握手。
+    server_ids: 非空时只加载指定 ID 的 server（角色级过滤）。
     """
     servers = await MCPServerRepository(session).list_by_user(
         user_id, enabled_only=True
     )
+    # 角色级过滤
+    if server_ids:
+        sid_set = set(server_ids)
+        servers = [s for s in servers if str(s.id) in sid_set]
+    # 角色过滤时不走缓存（不同角色选不同 server，fingerprint 不覆盖此维度）
+    use_cache = not server_ids
     uid = str(user_id)
     fingerprint = _servers_fingerprint(servers)
     now = time.monotonic()
-    cached = _MCP_CACHE.get(uid)
-    if cached and cached[0] > now and cached[1] == fingerprint:
-        return list(cached[2])  # 复用缓存（返回副本，避免外部改名污染缓存）
+    if use_cache:
+        cached = _MCP_CACHE.get(uid)
+        if cached and cached[0] > now and cached[1] == fingerprint:
+            return list(cached[2])
 
     tools: list[BaseTool] = []
     seen: set[str] = set()
@@ -96,8 +103,9 @@ async def build_mcp_tools(
         for t in raw:
             _rename(t, prefix, seen)
             tools.append(t)
-    # 仅在全部 server 都成功（无跳过）时缓存，避免把"部分失败"的残缺列表缓存住
-    _MCP_CACHE[uid] = (now + _MCP_CACHE_TTL, fingerprint, list(tools))
+    # 仅在无角色过滤且全部成功时缓存
+    if use_cache:
+        _MCP_CACHE[uid] = (now + _MCP_CACHE_TTL, fingerprint, list(tools))
     return tools
 
 

@@ -21,6 +21,7 @@ class PersonaCreate(BaseModel):
     enable_memory: bool = Field(default=True)
     enable_web_search: bool = Field(default=False)
     enable_mcp: bool = Field(default=False)
+    mcp_server_ids: list[str] = Field(default_factory=list)
     enable_active_recall: bool = Field(default=True)
     enable_cross_session: bool = Field(default=False)
     kb_ids: list[str] = Field(default_factory=list)
@@ -44,6 +45,7 @@ class PersonaUpdate(BaseModel):
     enable_memory: bool | None = Field(default=None)
     enable_web_search: bool | None = Field(default=None)
     enable_mcp: bool | None = Field(default=None)
+    mcp_server_ids: list[str] | None = Field(default=None)
     enable_active_recall: bool | None = Field(default=None)
     enable_cross_session: bool | None = Field(default=None)
     kb_ids: list[str] | None = Field(default=None)
@@ -70,6 +72,7 @@ class PersonaOut(BaseModel):
     enable_memory: bool
     enable_web_search: bool
     enable_mcp: bool
+    mcp_server_ids: list[str]
     enable_active_recall: bool
     enable_cross_session: bool
     kb_ids: list[str]

@@ -36,7 +36,15 @@ SKILL_STORAGE_ROOT = os.path.join(settings.storage_dir, "skills")
 # ── SKILL.md 解析（模块级辅助函数）──
 
 def _parse_frontmatter_yaml(raw: str) -> dict:
-    """解析精简 YAML frontmatter。"""
+    """解析精简 YAML frontmatter。兼容 Claude Code / Cursor / Continue 等主流 SKILL.md 格式。
+
+    字段映射：
+      name / description / icon
+      tool_keys / allowed-tools → tool_keys（工具白名单）
+      tools → 脚本工具声明列表
+      triggers → config.triggers（快捷触发词，自动转 quick_prompts）
+      model → config.model（可选）
+    """
     meta: dict = {}
     current_key: str | None = None
     for line in raw.splitlines():
@@ -59,6 +67,11 @@ def _parse_frontmatter_yaml(raw: str) -> dict:
                 meta[current_key].append(item)
         else:
             current_key = None
+
+    # 别名兼容
+    if "allowed-tools" in meta:
+        raw_val = meta.pop("allowed-tools")
+        meta.setdefault("tool_keys", raw_val if isinstance(raw_val, list) else [raw_val])
 
     if "tool_keys" in meta and not isinstance(meta["tool_keys"], list):
         meta["tool_keys"] = [meta["tool_keys"]]
@@ -131,18 +144,35 @@ def _skill_dir(skill_id: uuid.UUID) -> str:
 
 
 def _extract_scripts(zf: zipfile.ZipFile, skill_id: uuid.UUID) -> str:
-    """将 zip 中 scripts/ 目录解压到 storage/skills/{skill_id}/，返回存储路径。"""
+    """将 zip 中 scripts/ 目录解压到 storage/skills/{skill_id}/。
+
+    兼容多种目录结构：
+      scripts/analyze.py              ← 扁平
+      my-skill/scripts/analyze.py     ← 嵌套
+    """
     dst = _skill_dir(skill_id)
     os.makedirs(dst, exist_ok=True)
 
-    # 写 SKILL.md 到磁盘（供执行时参考）
-    if "SKILL.md" in zf.namelist():
-        zf.extract("SKILL.md", dst)
+    # 找到 SKILL.md 并写入
+    skill_md_names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
+    for name in skill_md_names:
+        # 提取到 dst 根，去掉前缀目录
+        target = os.path.join(dst, "SKILL.md")
+        with zf.open(name) as src:
+            with open(target, "wb") as out:
+                out.write(src.read())
 
-    # 解压 scripts/ 目录
-    for name in zf.namelist():
-        if name.startswith("scripts/") and not name.endswith("/"):
-            zf.extract(name, dst)
+    # 解压 scripts/ 目录（去掉可能的前缀目录）
+    script_names = [n for n in zf.namelist() if "scripts/" in n and not n.endswith("/")]
+    for name in script_names:
+        # 取 scripts/ 之后的部分作为目标路径
+        idx = name.index("scripts/")
+        rel = name[idx:]  # scripts/analyze.py
+        target = os.path.join(dst, rel)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with zf.open(name) as src:
+            with open(target, "wb") as out:
+                out.write(src.read())
 
     return dst
 
@@ -276,17 +306,34 @@ class SkillService:
 
     @staticmethod
     def _parse_skill_zip(data: bytes) -> tuple[dict, str, str]:
-        """解析 .soulskill.zip，返回 (manifest, prompt_text, import_hash)。"""
+        """解析 .zip 技能包，兼容多种目录结构和主流 SKILL.md 格式。
+
+        支持：
+          SKILL.md                    ← 扁平
+          my-skill/SKILL.md           ← 单层目录
+          **/SKILL.md                 ← 任意嵌套，取第一个
+        兼容 Claude Code / Cursor / Continue 的 frontmatter。
+        """
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                names = set(zf.namelist())
-                if "SKILL.md" not in names:
+                all_names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
+                if not all_names:
                     raise BizError("压缩包缺少 SKILL.md", code=4070)
-                md_text = zf.read("SKILL.md").decode("utf-8")
+                # 优先扁平结构
+                md_name = "SKILL.md" if "SKILL.md" in all_names else all_names[0]
+                md_text = zf.read(md_name).decode("utf-8")
                 meta, body = _parse_frontmatter(md_text)
                 prompt_text, config = _split_skill_body(body)
 
-                # 解析 tools（脚本声明）
+                # triggers -> quick_prompts（Claude Code 兼容）
+                triggers = meta.get("triggers", [])
+                if isinstance(triggers, list) and triggers:
+                    qp = config.get("quick_prompts", [])
+                    config["quick_prompts"] = qp + [str(t) for t in triggers if t]
+                if "model" in meta:
+                    config["model"] = meta["model"]
+
+                # tools（脚本声明）
                 tools_def = meta.get("tools", [])
                 if isinstance(tools_def, list):
                     config["tools"] = tools_def
@@ -296,7 +343,7 @@ class SkillService:
                 manifest = {
                     "name": str(meta.get("name", ""))[:64],
                     "description": str(meta.get("description", ""))[:256],
-                    "icon": str(meta.get("icon", "🧩"))[:16],
+                    "icon": str(meta.get("icon", ""))[:16],
                     "tool_keys": list(meta.get("tool_keys", [])),
                     "config": config,
                 }

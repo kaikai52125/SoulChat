@@ -15,6 +15,7 @@ import ResearchPage from './pages/ResearchPage'
 import AgentTaskPage from './pages/AgentTaskPage'
 import NotifyChannelPage from './pages/NotifyChannelPage'
 import AgentConfigPage from './pages/AgentConfigPage'
+import ToolConfigPage from './pages/ToolConfigPage'
 import SearchPage from './pages/SearchPage'
 import FavoritesPage from './pages/FavoritesPage'
 import ProfilePage from './pages/ProfilePage'
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="profile" element={<ProfilePage />} />
             <Route path="settings/models" element={<ModelConfigPage />} />
             <Route path="settings/agent" element={<AgentConfigPage />} />
+            <Route path="settings/tools" element={<ToolConfigPage />} />
             <Route path="settings/notify" element={<NotifyChannelPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

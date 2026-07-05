@@ -67,6 +67,7 @@ class AgentPersonaService:
         persona.enable_memory = body.enable_memory
         persona.enable_web_search = body.enable_web_search
         persona.enable_mcp = body.enable_mcp
+        persona.mcp_server_ids = list(body.mcp_server_ids) if body.mcp_server_ids else []
         persona.enable_active_recall = body.enable_active_recall
         persona.enable_cross_session = body.enable_cross_session
         persona.kb_ids = list(body.kb_ids)
@@ -103,6 +104,7 @@ class AgentPersonaService:
         _set_if("enable_memory", persona, fields)
         _set_if("enable_web_search", persona, fields)
         _set_if("enable_mcp", persona, fields)
+        _set_if("mcp_server_ids", persona, fields, transform=list)
         _set_if("enable_active_recall", persona, fields)
         _set_if("enable_cross_session", persona, fields)
         _set_if("kb_ids", persona, fields, transform=list)
@@ -148,6 +150,7 @@ class AgentPersonaService:
             "enable_memory": persona.enable_memory,
             "enable_web_search": persona.enable_web_search,
             "enable_mcp": persona.enable_mcp,
+            "mcp_server_ids": persona.mcp_server_ids or [],
             "enable_active_recall": persona.enable_active_recall,
             "enable_cross_session": persona.enable_cross_session,
             "kb_ids": persona.kb_ids or [],
@@ -221,10 +224,21 @@ class AgentPersonaService:
             )
         ) or 0
 
+        # MCP 工具调用次数（从 tracing）
+        mcp_calls = await self.session.scalar(
+            select(func.count(AgentSpan.id)).where(
+                AgentSpan.trace_id.in_(
+                    select(AgentTrace.trace_id).where(AgentTrace.persona_id == persona_id)
+                ),
+                AgentSpan.span_type == "mcp_call",
+            )
+        ) or 0
+
         return {
             "conversations": conv_count,
             "messages": msg_count,
             "tool_calls": tool_calls,
+            "mcp_calls": mcp_calls,
             "traces": trace_count,
             "total_cost_cny": round(float(total_cost), 4),
             "skills": skill_count,

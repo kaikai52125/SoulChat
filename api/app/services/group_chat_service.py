@@ -195,6 +195,8 @@ class GroupChatService:
                     "enable_knowledge": persona.enable_knowledge,
                     "enable_memory": persona.enable_memory,
                     "enable_web_search": persona.enable_web_search,
+                    "enable_mcp": persona.enable_mcp,
+                    "mcp_server_ids": [str(s) for s in (persona.mcp_server_ids or [])],
                     "kb_ids": list(persona.kb_ids or []),
                 }
             )
@@ -1040,6 +1042,8 @@ class GroupChatService:
                 overrides=overrides,
                 stats_holder=self._tool_stats,
                 kb_ids=kb_ids,
+                enable_mcp=bool(member.get("enable_mcp")),
+                mcp_server_ids=[str(s) for s in (member.get("mcp_server_ids") or [])] if member.get("mcp_server_ids") else None,
             )
         except Exception as e:
             logger.warning("角色 %s 工具构建失败（降级纯对话）: %s", member.get("name"), e)

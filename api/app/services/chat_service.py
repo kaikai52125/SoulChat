@@ -694,6 +694,7 @@ class ChatService:
             overrides["knowledge_search"] = persona.enable_knowledge
             overrides["memory_search"] = persona.enable_memory
             overrides["web_search"] = persona.enable_web_search
+        # 对话页临时覆盖（优先级最高）
         if body.enable_knowledge is not None:
             overrides["knowledge_search"] = body.enable_knowledge
         if body.enable_memory is not None:
@@ -705,6 +706,12 @@ class ChatService:
         kb_ids = list(persona.kb_ids) if persona and persona.kb_ids else None
         if body.kb_ids is not None:
             kb_ids = list(body.kb_ids)
+
+        tools = await build_enabled_tools(
+            self.session, user_id, citations, overrides, stats_holder, kb_ids,
+            enable_mcp=persona.enable_mcp if persona else False,
+            mcp_server_ids=[str(s) for s in persona.mcp_server_ids] if persona and persona.mcp_server_ids else None,
+        )
 
         # 技能工具白名单叠加（取并集限制——所有技能的白名单取交集？不，应该是任一技能允许的工具就允许）
         skill_tool_keys: list[str] | None = None
@@ -720,10 +727,7 @@ class ChatService:
         from app.core.agent.tools.builtin.persona_memory import set_current_persona
         set_current_persona(str(persona.id) if persona else None)
 
-        tools = await build_enabled_tools(
-            self.session, user_id, citations, overrides, stats_holder, kb_ids
-        )
-        # 技能白名单过滤
+        # 技能白名单过滤（基于第一次构建的工具列表）
         if skill_tool_keys and tools:
             tools = [t for t in tools if t.name in skill_tool_keys]
 

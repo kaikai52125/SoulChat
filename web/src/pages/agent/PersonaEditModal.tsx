@@ -63,6 +63,8 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
   const [enableMemory, setEnableMemory] = useState(true)
   const [enableWebSearch, setEnableWebSearch] = useState(false)
   const [enableMcp, setEnableMcp] = useState(false)
+  const [mcpServerIds, setMcpServerIds] = useState<string[]>([])
+  const [mcpServers, setMcpServers] = useState<{id:string,name:string}[]>([])
   const [toolKeys, setToolKeys] = useState<string[]>([])
   const [kbIds, setKbIds] = useState<string[]>([])
 
@@ -104,7 +106,14 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
       setShowAvatar(persona?.show_avatar ?? false)
       setEnableActiveRecall(persona?.enable_active_recall ?? true)
       setEnableCrossSession(persona?.enable_cross_session ?? false)
+      setMcpServerIds(persona?.mcp_server_ids ?? [])
       ensureKbLoaded()
+      // 加载用户 MCP 服务器列表
+      import('@/api/mcp').then(({ mcpApi }) => {
+        mcpApi.list().then(({ data }) => {
+          setMcpServers(data.map((s) => ({ id: s.id, name: s.name })))
+        }).catch(() => {})
+      })
       if (persona) skillStore.loadForPersona(persona.id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,6 +185,7 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
       enable_memory: enableMemory,
       enable_web_search: enableWebSearch,
       enable_mcp: enableMcp,
+      mcp_server_ids: mcpServerIds,
       enable_active_recall: enableActiveRecall,
       enable_cross_session: enableCrossSession,
       kb_ids: kbIds,
@@ -435,21 +445,49 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
         <div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>知识库检索</span>
+              <span>🔍 知识库检索</span>
               <Switch checked={enableKnowledge} onChange={setEnableKnowledge} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>记忆工具</span>
+              <span>🧠 记忆工具</span>
               <Switch checked={enableMemory} onChange={setEnableMemory} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>联网搜索</span>
+              <span>🌐 联网搜索</span>
               <Switch checked={enableWebSearch} onChange={setEnableWebSearch} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>MCP 工具</span>
+              <span>🕐 时间工具</span>
+              <Switch defaultChecked disabled />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>📝 角色记忆工具</span>
+              <Switch defaultChecked disabled />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>🔌 MCP 工具</span>
               <Switch checked={enableMcp} onChange={setEnableMcp} />
             </div>
+            {enableMcp && (
+              <div style={{ marginTop: 8 }}>
+                <div className="persona-field-label">选用 MCP 服务（空=全部可用）</div>
+                {mcpServers.length === 0 ? (
+                  <div style={{ fontSize: 12, color: '#fa8c16' }}>
+                    还没有 MCP 服务，先去「设置 → 工具配置 → MCP 服务」添加
+                  </div>
+                ) : (
+                  <Select
+                    mode="multiple"
+                    value={mcpServerIds}
+                    onChange={setMcpServerIds}
+                    style={{ width: '100%' }}
+                    placeholder="留空使用全部 MCP 服务"
+                    allowClear
+                    options={mcpServers.map((s) => ({ value: s.id, label: s.name }))}
+                  />
+                )}
+              </div>
+            )}
 
             <div style={{ marginTop: 8 }}>
               <div className="persona-field-label">默认知识库范围</div>

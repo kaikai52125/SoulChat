@@ -1,4 +1,4 @@
-"""MCP 服务配置路由：CRUD + 测试连接 + 同步工具 + 启停。"""
+"""MCP 服务配置路由：CRUD + 测试连接 + 同步工具 + 启停 + 内置市场模板。"""
 import uuid
 
 from fastapi import APIRouter, Depends
@@ -84,6 +84,18 @@ async def sync_server(
     return success(service.to_out_dict(server), "已同步")
 
 
+@router.get("/builtins")
+async def list_builtin_mcp():
+    from app.services.mcp_builtins import BUILTIN_MCP_TEMPLATES
+    return success([
+        {"key": t["key"], "name": t["name"], "description": t["description"],
+         "icon": t["icon"], "transport": t["transport"],
+         "auth_type": t["auth_type"], "tools": t.get("tools", []),
+         "url_template": t.get("url_template", "")}
+        for t in BUILTIN_MCP_TEMPLATES
+    ])
+
+
 @router.put("/{server_id}/toggle")
 async def toggle_server(
     server_id: uuid.UUID,
@@ -94,3 +106,5 @@ async def toggle_server(
     service = MCPService(session)
     server = await service.toggle(user.id, server_id, body.enabled)
     return success(service.to_out_dict(server), "已保存")
+
+

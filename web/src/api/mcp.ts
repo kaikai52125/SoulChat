@@ -68,4 +68,12 @@ export const mcpApi = {
       enabled,
     })
   },
+  builtins() {
+    return client.get<unknown, Wrapped<BuiltinMcp[]>>('/tools/mcp/builtins')
+  },
+}
+
+export interface BuiltinMcp {
+  key: string; name: string; description: string; icon: string
+  transport: string; auth_type: string; url_template: string; tools: McpToolMeta[]
 }
