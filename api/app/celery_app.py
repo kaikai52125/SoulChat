@@ -45,6 +45,8 @@ celery_app.conf.update(
         # 调度心跳留 beat 队列（轻量）；研究执行进独立 research 队列，避免长任务堵死心跳
         "app.tasks.agent_task.heartbeat": {"queue": "beat"},
         "app.tasks.agent_task.run": {"queue": "research"},
+        "app.tasks.beat.dedup_statements": {"queue": "beat"},
+        "app.tasks.beat.cleanup_correction_records": {"queue": "beat"},
     },
     # Celery beat 定时
     beat_schedule={
@@ -67,6 +69,14 @@ celery_app.conf.update(
         "reflect-memory": {
             "task": "app.tasks.beat.reflect_memory",
             "schedule": crontab(hour=4, minute=30),  # 每天凌晨 4:30 反思（巩固之后）
+        },
+        "dedup-statements": {
+            "task": "app.tasks.beat.dedup_statements",
+            "schedule": crontab(hour=3, minute=0),  # 每天凌晨 3:00 Statement 语义去重
+        },
+        "cleanup-correction-records": {
+            "task": "app.tasks.beat.cleanup_correction_records",
+            "schedule": crontab(hour=5, minute=0),  # 每天凌晨 5:00 免疫记录清理（30天TTL）
         },
     },
 )

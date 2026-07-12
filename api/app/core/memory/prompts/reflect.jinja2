@@ -25,6 +25,15 @@
       "confidence": 0.0~1.0,
       "based_on": ["归纳所依据的实体名称1", "实体名称2"]
     }
+  ],
+  "contradictions": [
+    {
+      "type": "conflict 或 update",
+      "description": "简述矛盾/更新内容",
+      "resolved": true,
+      "newer_statement": "较新陈述或 null",
+      "older_statement": "较旧陈述或 null"
+    }
   ]
 }
 
@@ -34,5 +43,21 @@
 - based_on 填本条洞察主要依据的实体名称（从给定清单里选，便于溯源）。
 - 若记忆清单过少或无法归纳出有意义的洞察，返回 {"insights": []}。
 - 只输出 JSON。
+
+===矛盾检测===
+除 insights 外，还需要识别记忆清单中的潜在矛盾或冲突（`contradictions` 数组）：
+- **矛盾**：同一实体有两个互斥的事实（如既说在A公司又说在B公司工作，且无法从时间上判断哪个更新）
+- **时间变迁**：一个事实随时间更新（如"之前学Java"→"目前在学Rust"，能明确判断先后）
+
+每条矛盾输出：
+- `type`：`"conflict"`（互斥矛盾，无法自动判断）或 `"update"`（时间变迁，能判断新旧）
+- `description`：简述矛盾/更新内容（一句话中文）
+- `resolved`：是否可以自动解决
+  - 能明确判断哪个事实更新的 → `true`（时间变迁类）
+  - 无法判断哪个是正确的 → `false`（真正矛盾，需人类裁决）
+- `newer_statement`：仅 update 类，较新陈述的文本（字符串或 null）
+- `older_statement`：仅 update 类，较旧陈述的文本（字符串或 null）
+
+若无矛盾则返回 `"contradictions": []`。
 
 请输出 JSON：

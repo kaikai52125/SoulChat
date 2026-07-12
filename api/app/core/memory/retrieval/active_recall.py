@@ -2,12 +2,14 @@
 
 与「记忆工具」并存：主动召回提供基础背景（主动、稳定），LLM 仍可调记忆工具查更细。
 带余弦门控节流：命中相关度低于阈值则不注入，避免无关噪声挤占上下文。
+已过期关系排后并标记 [已过期]。
 
 性能：query 只做一次 embedding（洞察/实体召回复用同一向量）；两路召回并行；
 整体加超时保护，召回是锦上添花，超时即放弃注入，绝不拖累对话首字延迟。
 """
 import asyncio
 import uuid
+from datetime import datetime
 
 from app.config import settings
 from app.core.llm.client import LLMClient
@@ -26,6 +28,23 @@ def _confidence(value: object, default: float = 0.8) -> float:
         return float(value if value is not None else default)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_dt(value: object) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, datetime):
+            return value
+        s = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_expired(invalid_at: object) -> bool:
+    dt = _parse_dt(invalid_at)
+    return dt is not None and dt < datetime.now()
 
 
 def _uncertain_prefix(confidence: object) -> str:
@@ -99,11 +118,22 @@ async def _do_recall(
                 desc = (h.get("description") or "").strip()
                 prefix = _uncertain_prefix(h.get("confidence"))
                 lines.append(f"- {prefix}{name}：{desc}" if desc else f"- {prefix}{name}")
-                for rel in h.get("relations", [])[:2]:
+                # 按时间有效性排序：未过期的在前，已过期的在后；各自内部按置信度排
+                relations = sorted(
+                    h.get("relations", []),
+                    key=lambda r: (_is_expired(r.get("invalid_at")), -_confidence(r.get("confidence"))),
+                )
+                for rel in relations[:2]:
                     obj = rel.get("object_name") or ""
-                    if obj:
-                        rel_prefix = _uncertain_prefix(rel.get("confidence"))
-                        lines.append(f"  · {rel_prefix}{name} {rel.get('predicate', '')} {obj}")
+                    if not obj:
+                        continue
+                    if _is_expired(rel.get("invalid_at")):
+                        status = " [已过期]"
+                    elif _confidence(rel.get("confidence")) < settings.active_recall_uncertain_confidence:
+                        status = " [待确认]"
+                    else:
+                        status = ""
+                    lines.append(f"  · {name} {rel.get('predicate', '')} {obj}{status}")
         except Exception as e:
             logger.warning("主动召回-记忆失败（忽略）: %s", e)
         return lines

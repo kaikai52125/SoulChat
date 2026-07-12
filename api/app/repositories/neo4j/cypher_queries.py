@@ -47,7 +47,10 @@ SET n.user_id = row.user_id,
     n.dialog_at = row.dialog_at,
     n.embedding = row.embedding,
     n.importance = row.importance,
-    n.confidence = row.confidence,
+    n.confidence = CASE
+        WHEN n.confidence IS NULL THEN row.confidence
+        ELSE CASE WHEN row.confidence > n.confidence THEN row.confidence ELSE n.confidence END
+    END,
     n.memory_layer = coalesce(n.memory_layer, row.memory_layer),
     n.access_count = coalesce(n.access_count, row.access_count),
     n.has_emotional_state = row.has_emotional_state,
@@ -77,7 +80,10 @@ SET n.user_id = row.user_id,
         WHEN n.importance IS NULL THEN row.importance
         ELSE CASE WHEN row.importance > n.importance THEN row.importance ELSE n.importance END
     END,
-    n.confidence = row.confidence,
+    n.confidence = CASE
+        WHEN n.confidence IS NULL THEN row.confidence
+        ELSE CASE WHEN row.confidence > n.confidence THEN row.confidence ELSE n.confidence END
+    END,
     n.memory_layer = coalesce(n.memory_layer, row.memory_layer),
     n.access_count = coalesce(n.access_count, row.access_count),
     n.mention_count = coalesce(n.mention_count, 0) + row.mention_count,
@@ -134,7 +140,10 @@ SET r.id = row.id,
         WHEN r.importance IS NULL THEN row.importance
         ELSE CASE WHEN row.importance > r.importance THEN row.importance ELSE r.importance END
     END,
-    r.confidence = row.confidence,
+    r.confidence = CASE
+        WHEN r.confidence IS NULL THEN row.confidence
+        ELSE CASE WHEN row.confidence > r.confidence THEN row.confidence ELSE r.confidence END
+    END,
     r.access_count = coalesce(r.access_count, row.access_count),
     r.created_at = row.created_at
 RETURN count(r) AS cnt
@@ -269,6 +278,7 @@ RETURN e.id AS entity_id, e.name AS entity_name,
        r.predicate AS predicate, r.source_text AS source_text,
        coalesce(r.importance, 0.5) AS importance,
        coalesce(r.confidence, 0.8) AS confidence,
+       r.valid_at AS valid_at, r.invalid_at AS invalid_at,
        o.id AS object_id, o.name AS object_name, o.type AS object_type
 """
 
@@ -688,4 +698,113 @@ WHERE node.user_id = $user_id
 RETURN node.id AS id, node.theme AS theme, node.content AS content,
        coalesce(node.importance, 0.6) AS importance,
        coalesce(node.confidence, 0.7) AS confidence, score
+"""
+
+# ── 冲突审查：降低实体置信度（绕过 ENTITY_SAVE 的 max 逻辑）──
+
+ENTITY_FORCE_LOWER_CONFIDENCE = """
+MATCH (e:Entity {user_id: $user_id, id: $entity_id})
+SET e.confidence = $confidence
+RETURN e.id AS id, e.confidence AS confidence
+"""
+
+# ── 冲突检测：RELATION 同 predicate 不同 target ──
+
+RELATION_FIND_SAME_PREDICATE = """
+MATCH (e:Entity {user_id: $user_id, id: $source_id})-[r:RELATION]->(o:Entity)
+WHERE r.predicate = $predicate AND o.id <> $new_target_id
+RETURN r.predicate AS predicate, o.id AS target_id, o.name AS target_name,
+       r.id AS relation_id, r.confidence AS confidence, r.importance AS importance,
+       r.valid_at AS valid_at, r.invalid_at AS invalid_at
+"""
+
+RELATION_MARK_SUPERSEDED = """
+MATCH (a:Entity {user_id: $user_id})-[r_old:RELATION]->(b:Entity)
+WHERE r_old.id = $old_relation_id
+SET r_old.invalid_at = $now,
+    r_old.superseded_by = $new_relation_id
+WITH a, r_old
+MATCH (a)-[r_new:RELATION]->(c:Entity)
+WHERE r_new.id = $new_relation_id
+SET r_new.supersedes = $old_relation_id
+RETURN r_old.id AS superseded_id, r_new.id AS superseding_id
+"""
+
+# ── Statement 语义去重 ──
+
+STATEMENT_VECTOR_SIMILAR = """
+CALL db.index.vector.queryNodes('statement_embedding_index', 1, $vector)
+YIELD node, score
+WHERE node.user_id = $user_id AND score >= $min_score
+RETURN node.id AS id, node.statement AS statement, score
+LIMIT 1
+"""
+
+# ── 低置信度标记（供反思矛盾推送审查）──
+
+STATEMENT_LOWER_CONFIDENCE = """
+MATCH (s:Statement {user_id: $user_id, id: $statement_id})
+SET s.confidence = CASE
+    WHEN s.confidence * $factor < 0.0 THEN 0.0
+    ELSE s.confidence * $factor
+END
+RETURN s.id AS id, s.confidence AS confidence
+"""
+
+# ── 人类修正免疫记忆 ──
+
+LABEL_CORRECTION_RECORD = "CorrectionRecord"
+
+CORRECTION_RECORD_SAVE = """
+MERGE (cr:CorrectionRecord {user_id: $user_id, entity_name: $entity_name, entity_type: $entity_type})
+ON CREATE SET cr.id = $id, cr.action = $action, cr.corrected_to = coalesce($corrected_to, ''), cr.created_at = $created_at
+ON MATCH SET cr.action = $action, cr.corrected_to = coalesce($corrected_to, '')
+RETURN cr.id AS id
+"""
+
+CORRECTION_RECORD_CHECK = """
+MATCH (cr:CorrectionRecord {user_id: $user_id})
+WHERE toLower(cr.entity_name) = toLower($entity_name)
+  AND cr.entity_type = $entity_type
+RETURN cr.action AS action, coalesce(cr.corrected_to, '') AS corrected_to, cr.id AS id
+LIMIT 1
+"""
+
+# ── 免疫记录定期清理（TTL，默认 30 天）──
+
+CORRECTION_RECORD_CLEANUP = """
+MATCH (cr:CorrectionRecord)
+WHERE cr.created_at < $cutoff
+DETACH DELETE cr
+RETURN count(cr) AS deleted
+"""
+
+# ── Statement 语义去重（批量扫描高度相似的 Statement 对）──
+
+STATEMENT_FIND_DUPLICATES = """
+MATCH (s:Statement {user_id: $user_id})
+WHERE s.embedding IS NOT NULL
+WITH s
+CALL db.index.vector.queryNodes('statement_embedding_index', $top_k, s.embedding)
+YIELD node, score
+WHERE node.id <> s.id AND node.user_id = $user_id AND score >= $min_score
+RETURN s.id AS source_id, s.statement AS source_text, s.created_at AS source_created,
+       node.id AS target_id, node.statement AS target_text, node.created_at AS target_created,
+       score
+LIMIT $limit
+"""
+
+STATEMENT_MERGE_DUPLICATE = """
+MATCH (source:Statement {user_id: $user_id, id: $source_id}),
+      (target:Statement {user_id: $user_id, id: $target_id})
+WHERE source.id <> target.id
+// 把 source 的 MENTIONS 边重定向到 target
+OPTIONAL MATCH (source)-[m:MENTIONS]->(e:Entity)
+FOREACH (_ IN CASE WHEN m IS NOT NULL THEN [1] ELSE [] END |
+  MERGE (target)-[:MENTIONS]->(e)
+)
+// 连语义相似边
+MERGE (source)-[:SEMANTICALLY_SIMILAR_TO]->(target)
+SET source.merged_into = target.id
+RETURN source.id AS merged_id, target.id AS kept_id
 """

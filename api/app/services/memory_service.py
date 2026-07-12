@@ -283,6 +283,13 @@ class MemoryService:
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("memory_corrections 写入失败(不影响 Neo4j 已生效): %s", e)
+        # 写入免疫记忆 CorrectionRecord（失败不影响已生效的确认操作）
+        try:
+            await repo.save_correction_record(
+                uid, before.get("name", ""), before.get("type", ""), "confirm"
+            )
+        except Exception as e:
+            logger.warning("CorrectionRecord 写入失败(不影响确认操作): %s", e)
         return {"ok": True, "entity_id": entity_id}
 
     async def correct_entity_with_reason(
@@ -330,6 +337,14 @@ class MemoryService:
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("memory_corrections 写入失败: %s", e)
+        # 写入免疫记忆 CorrectionRecord
+        try:
+            await repo.save_correction_record(
+                uid, before.get("name", ""), before.get("type", ""), "correct",
+                corrected_to=name,
+            )
+        except Exception as e:
+            logger.warning("CorrectionRecord 写入失败: %s", e)
         return {"ok": True, "entity_id": entity_id, "name": after["name"]}
 
     async def delete_entity_with_reason(
@@ -359,6 +374,13 @@ class MemoryService:
             logger.warning("delete 落库失败,放弃删除: %s", e)
             return {"ok": False, "error": "落库失败,已取消删除"}
         await repo.delete_entity(uid, entity_id)
+        # 写入免疫记忆 CorrectionRecord（阻止后续被重新萃取）
+        try:
+            await repo.save_correction_record(
+                uid, before.get("name", ""), before.get("type", ""), "delete"
+            )
+        except Exception as e:
+            logger.warning("CorrectionRecord 写入失败(不影响删除操作): %s", e)
         return {"ok": True, "entity_id": entity_id}
 
     async def list_communities(self, user_id: uuid.UUID) -> list[dict]:

@@ -8,6 +8,7 @@ from app.core.logging import get_logger
 from app.core.memory.graph_models import (
     LABEL_CHUNK,
     LABEL_COMMUNITY,
+    LABEL_CORRECTION_RECORD,
     LABEL_DIALOGUE,
     LABEL_ENTITY,
     LABEL_EVENT,
@@ -36,6 +37,8 @@ _CONSTRAINTS = [
     f"FOR (n:{LABEL_COMMUNITY}) REQUIRE n.id IS UNIQUE",
     f"CREATE CONSTRAINT insight_id_unique IF NOT EXISTS "
     f"FOR (n:{LABEL_INSIGHT}) REQUIRE n.id IS UNIQUE",
+    f"CREATE CONSTRAINT correction_record_id_unique IF NOT EXISTS "
+    f"FOR (n:{LABEL_CORRECTION_RECORD}) REQUIRE n.id IS UNIQUE",
 ]
 
 # 普通属性索引：按 user_id 过滤是高频操作
@@ -51,6 +54,11 @@ _PROPERTY_INDEXES = [
     # 洞察：按 user_id + theme 检索/收敛
     f"CREATE INDEX insight_user_idx IF NOT EXISTS FOR (n:{LABEL_INSIGHT}) ON (n.user_id)",
     f"CREATE INDEX insight_theme_idx IF NOT EXISTS FOR (n:{LABEL_INSIGHT}) ON (n.theme)",
+    # 免疫记忆：按 user_id + entity_name + entity_type 查询 + TTL 清理
+    f"CREATE INDEX correction_record_lookup_idx IF NOT EXISTS "
+    f"FOR (n:{LABEL_CORRECTION_RECORD}) ON (n.user_id, n.entity_name, n.entity_type)",
+    f"CREATE INDEX correction_record_created_idx IF NOT EXISTS "
+    f"FOR (n:{LABEL_CORRECTION_RECORD}) ON (n.created_at)",
 ]
 
 # 全文索引（cjk 分词，支持中文关键词检索）

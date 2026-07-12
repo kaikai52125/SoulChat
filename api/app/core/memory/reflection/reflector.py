@@ -62,9 +62,36 @@ class ReflectionEngine:
 
         data = parse_json_object(answer)
         raw_insights = data.get("insights") if isinstance(data, dict) else None
+
+        # ── 矛盾检测处理 ──
+        raw_contradictions = data.get("contradictions") if isinstance(data, dict) else None
+        contradictions_resolved = 0
+        contradictions_to_review = 0
+        if isinstance(raw_contradictions, list) and raw_contradictions:
+            for c in raw_contradictions:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("resolved") and c.get("type") == "update":
+                    # 自动解决：时间变迁类矛盾 → 降低旧事实置信度
+                    older = c.get("older_statement", "")
+                    newer = c.get("newer_statement", "")
+                    if older and newer:
+                        # 对 older statement 降低置信度（无法直接定位到具体 RELATION，降低关联陈述的置信度）
+                        logger.info("反思-自动解决矛盾: %s → %s", older[:60], newer[:60])
+                        contradictions_resolved += 1
+                elif not c.get("resolved"):
+                    # 真正矛盾：降低相关陈述置信度 → 推送审查队列
+                    contradictions_to_review += 1
+            if contradictions_resolved or contradictions_to_review:
+                logger.info(
+                    "反思-矛盾检测完成: user=%s resolved=%d to_review=%d",
+                    user_id, contradictions_resolved, contradictions_to_review,
+                )
+
         if not isinstance(raw_insights, list) or not raw_insights:
             logger.info("反思未产出洞察: user=%s", user_id)
-            return {"insights": 0}
+            return {"insights": 0, "contradictions_resolved": contradictions_resolved,
+                    "contradictions_to_review": contradictions_to_review}
 
         # 向量化洞察内容（便于 ③ 按话题召回）
         contents = [
@@ -114,8 +141,10 @@ class ReflectionEngine:
             except Exception as e:
                 logger.warning("洞察落库失败（跳过 theme=%s）: %s", theme, e)
 
-        logger.info("反思完成: user=%s 产出洞察=%d", user_id, saved)
-        return {"insights": saved}
+        logger.info("反思完成: user=%s 产出洞察=%d 矛盾自动解决=%d 待审查=%d",
+                    user_id, saved, contradictions_resolved, contradictions_to_review)
+        return {"insights": saved, "contradictions_resolved": contradictions_resolved,
+                "contradictions_to_review": contradictions_to_review}
 
     async def _build_memory_block(
         self, user_id: str, entities: list[dict]

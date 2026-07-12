@@ -55,7 +55,7 @@ async def _run_clustering() -> int:
     """为所有用户跑一次全量社区聚类（定时兜底纠偏）。"""
     from app.core.llm.resolver import get_optional_client_for_type
     from app.core.memory.clustering.label_propagation import LabelPropagationEngine
-    from app.db import neo4j
+
 
     engine_db = create_task_engine()
     session_maker = async_sessionmaker(
@@ -78,7 +78,6 @@ async def _run_clustering() -> int:
                     logger.warning("用户 %s 全量聚类失败: %s", uid, e)
     finally:
         await engine_db.dispose()
-        await neo4j.close()
     logger.info("全量社区聚类完成: %d 个用户", count)
     return count
 
@@ -93,7 +92,7 @@ async def _run_consolidation() -> int:
     """为所有用户跑一次记忆巩固（短期→长期 + 画像增强）。"""
     from app.core.llm.resolver import get_optional_client_for_type
     from app.core.memory.consolidation.consolidator import ConsolidationEngine
-    from app.db import neo4j
+
 
     engine_db = create_task_engine()
     session_maker = async_sessionmaker(
@@ -116,7 +115,6 @@ async def _run_consolidation() -> int:
                     logger.warning("用户 %s 记忆巩固失败: %s", uid, e)
     finally:
         await engine_db.dispose()
-        await neo4j.close()
     logger.info("记忆巩固批量完成: %d 个用户", count)
     return count
 
@@ -131,7 +129,7 @@ async def _run_reflection() -> int:
     """为所有用户跑一次反思（归纳高层洞察 Insight）。"""
     from app.core.llm.resolver import get_optional_client_for_type
     from app.core.memory.reflection.reflector import ReflectionEngine
-    from app.db import neo4j
+
 
     engine_db = create_task_engine()
     session_maker = async_sessionmaker(
@@ -159,7 +157,6 @@ async def _run_reflection() -> int:
                     logger.warning("用户 %s 反思失败: %s", uid, e)
     finally:
         await engine_db.dispose()
-        await neo4j.close()
     logger.info("反思批量完成: %d 个用户", count)
     return count
 
@@ -174,7 +171,7 @@ async def _run_reflection_for_user(user_id: str) -> dict:
     """对单个用户跑一次反思（增量触发用）。"""
     from app.core.llm.resolver import get_optional_client_for_type
     from app.core.memory.reflection.reflector import ReflectionEngine
-    from app.db import neo4j
+
 
     engine_db = create_task_engine()
     session_maker = async_sessionmaker(
@@ -193,10 +190,85 @@ async def _run_reflection_for_user(user_id: str) -> dict:
             return await engine.run(user_id)
     finally:
         await engine_db.dispose()
-        await neo4j.close()
 
 
 @celery_app.task(name="app.tasks.beat.reflect_user")
 def reflect_user_task(user_id: str) -> dict:
     """单用户反思的 Celery 任务入口（萃取攒够 N 条后增量触发）。"""
     return asyncio.run(_run_reflection_for_user(user_id))
+
+
+# ── Statement 语义去重 ──
+
+async def _run_statement_dedup() -> int:
+    """为所有用户扫描并合并语义重复的 Statement。"""
+    from app.repositories.neo4j.memory_graph_repository import MemoryGraphRepository
+
+    engine_db = create_task_engine()
+    session_maker = async_sessionmaker(
+        engine_db, expire_on_commit=False, class_=AsyncSession
+    )
+    merged_total = 0
+    repo = MemoryGraphRepository()
+    try:
+        async with session_maker() as session:
+            result = await session.execute(select(User.id))
+            user_ids = [row[0] for row in result.all()]
+            for uid in user_ids:
+                user_str = str(uid)
+                try:
+                    # 扫描高度相似的 Statement 对
+                    dups = await repo.find_duplicate_statements(
+                        user_str, min_score=0.92, top_k=5, limit=50
+                    )
+                    for d in dups:
+                        source_id = d.get("source_id", "")
+                        target_id = d.get("target_id", "")
+                        if not source_id or not target_id:
+                            continue
+                        # 保留较早的作为 target，合并较新的
+                        source_created = d.get("source_created", "")
+                        target_created = d.get("target_created", "")
+                        if source_created < target_created:
+                            # source 更早 → 保留 source，合并 target
+                            source_id, target_id = target_id, source_id
+                        try:
+                            await repo.merge_duplicate_statement(
+                                user_str, source_id, target_id
+                            )
+                            merged_total += 1
+                        except Exception as e:
+                            logger.warning(
+                                "Statement 合并失败: source=%s target=%s err=%s",
+                                source_id, target_id, e,
+                            )
+                except Exception as e:
+                    logger.warning("用户 %s Statement 去重扫描失败: %s", uid, e)
+    finally:
+        await engine_db.dispose()
+    logger.info("Statement 语义去重完成: 合并 %d 对", merged_total)
+    return merged_total
+
+
+@celery_app.task(name="app.tasks.beat.dedup_statements")
+def dedup_statements_task() -> int:
+    """Statement 语义去重的 Celery 任务入口（定时）。"""
+    return asyncio.run(_run_statement_dedup())
+
+
+# ── 免疫记录定期清理（30 天 TTL）──
+
+async def _run_correction_cleanup(retention_days: int = 30) -> int:
+    """删除超过 retention_days 天的 CorrectionRecord。"""
+    from app.repositories.neo4j.memory_graph_repository import MemoryGraphRepository
+
+    repo = MemoryGraphRepository()
+    deleted = await repo.cleanup_correction_records(retention_days)
+    logger.info("CorrectionRecord 清理完成: retention=%d天 deleted=%d", retention_days, deleted)
+    return deleted
+
+
+@celery_app.task(name="app.tasks.beat.cleanup_correction_records")
+def cleanup_correction_records_task() -> int:
+    """CorrectionRecord TTL 清理的 Celery 任务入口（定时）。"""
+    return asyncio.run(_run_correction_cleanup())

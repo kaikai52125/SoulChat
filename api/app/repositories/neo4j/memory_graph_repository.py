@@ -31,8 +31,9 @@ def _dt(value: datetime | None) -> str | None:
 class MemoryGraphRepository:
     """记忆图谱数据访问层。"""
 
-    def __init__(self):
-        self._driver = get_driver()
+    def __init__(self, driver=None):
+        self._driver = driver or get_driver()
+        self._owns_driver = driver is None  # 外部传入的不负责关闭
 
     # ── 序列化：节点/边 → Cypher 参数行 ──
 
@@ -608,3 +609,168 @@ class MemoryGraphRepository:
                 top_k=top_k,
             )
             return [dict(r) async for r in result]
+
+    # ── 冲突审查：强制降低实体置信度（绕过 ENTITY_SAVE 的 max）──
+
+    async def force_lower_entity_confidence(
+        self, user_id: str, entity_id: str, confidence: float
+    ) -> None:
+        """强制降低实体置信度，不被 ENTITY_SAVE 的 CASE max 覆盖。"""
+        async with self._driver.session() as session:
+            await session.run(
+                cq.ENTITY_FORCE_LOWER_CONFIDENCE,
+                user_id=user_id,
+                entity_id=entity_id,
+                confidence=confidence,
+            )
+
+    # ── 冲突检测：同 predicate 不同 target ──
+
+    async def find_conflicting_relations(
+        self, user_id: str, source_id: str, predicate: str, new_target_id: str
+    ) -> list[dict[str, Any]]:
+        """查找同一 (source, predicate) 但不同 target 的已有 RELATION 边。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.RELATION_FIND_SAME_PREDICATE,
+                user_id=user_id,
+                source_id=source_id,
+                predicate=predicate,
+                new_target_id=new_target_id,
+            )
+            return [dict(r) async for r in result]
+
+    async def mark_relation_superseded(
+        self, user_id: str, old_relation_id: str, new_relation_id: str
+    ) -> dict[str, Any] | None:
+        """将旧关系标记为被新关系取代（设 invalid_at + 连 SUPERSEDES 边）。"""
+        now = datetime.now().isoformat()
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.RELATION_MARK_SUPERSEDED,
+                user_id=user_id,
+                old_relation_id=old_relation_id,
+                new_relation_id=new_relation_id,
+                now=now,
+            )
+            record = await result.single()
+            return dict(record) if record else None
+
+    # ── Statement 语义去重 ──
+
+    async def find_similar_statement(
+        self, user_id: str, vector: list[float], min_score: float = 0.92
+    ) -> dict[str, Any] | None:
+        """向量检索图谱中与给定向量高度相似的已有 Statement。无匹配返回 None。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.STATEMENT_VECTOR_SIMILAR,
+                user_id=user_id,
+                vector=vector,
+                min_score=min_score,
+            )
+            record = await result.single()
+            return dict(record) if record else None
+
+    # ── 低置信度标记（反思矛盾推送审查）──
+
+    async def lower_statement_confidence(
+        self, user_id: str, statement_id: str, factor: float = 0.7
+    ) -> dict[str, Any] | None:
+        """降低陈述的置信度（用于推送矛盾到审查队列）。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.STATEMENT_LOWER_CONFIDENCE,
+                user_id=user_id,
+                statement_id=statement_id,
+                factor=factor,
+            )
+            record = await result.single()
+            return dict(record) if record else None
+
+    # ── 人类修正免疫记忆 ──
+
+    async def save_correction_record(
+        self,
+        user_id: str,
+        entity_name: str,
+        entity_type: str,
+        action: str,
+        corrected_to: str | None = None,
+    ) -> str:
+        """写入/更新人类修正记录。返回 record id。"""
+        import uuid as _uuid
+
+        record_id = _uuid.uuid4().hex
+        now = datetime.now().isoformat()
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.CORRECTION_RECORD_SAVE,
+                id=record_id,
+                user_id=user_id,
+                entity_name=entity_name.strip().lower(),
+                entity_type=entity_type,
+                action=action,
+                corrected_to=corrected_to,
+                created_at=now,
+            )
+            record = await result.single()
+            return record["id"] if record else record_id
+
+    async def check_correction_record(
+        self, user_id: str, entity_name: str, entity_type: str
+    ) -> dict[str, Any] | None:
+        """查询是否有匹配的人类修正记录。无匹配返回 None。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.CORRECTION_RECORD_CHECK,
+                user_id=user_id,
+                entity_name=entity_name,
+                entity_type=entity_type,
+            )
+            record = await result.single()
+            return dict(record) if record else None
+
+    # ── 免疫记录定期清理 ──
+
+    async def cleanup_correction_records(self, retention_days: int = 30) -> int:
+        """删除超过 retention_days 天的 CorrectionRecord。返回删除数。"""
+        from datetime import timedelta
+
+        cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.CORRECTION_RECORD_CLEANUP, cutoff=cutoff
+            )
+            record = await result.single()
+            return record["deleted"] if record else 0
+
+    # ── Statement 语义去重 ──
+
+    async def find_duplicate_statements(
+        self, user_id: str, min_score: float = 0.92, top_k: int = 5, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """批量扫描高度相似的 Statement 对。返回 [source_id, target_id, score, ...] 列表。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.STATEMENT_FIND_DUPLICATES,
+                user_id=user_id,
+                min_score=min_score,
+                top_k=top_k,
+                limit=limit,
+            )
+            return [dict(r) async for r in result]
+
+    async def merge_duplicate_statement(
+        self, user_id: str, source_id: str, target_id: str
+    ) -> dict[str, Any] | None:
+        """将 source Statement 合并到 target：重定向 MENTIONS 边 + 连语义相似边。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.STATEMENT_MERGE_DUPLICATE,
+                user_id=user_id,
+                source_id=source_id,
+                target_id=target_id,
+            )
+            record = await result.single()
+            return dict(record) if record else None

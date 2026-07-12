@@ -3,6 +3,7 @@
 强制 user_id 过滤做数据隔离。命中实体后取其一跳关系，拼成「实体 + 关联事实」上下文。
 """
 import uuid
+from datetime import datetime
 
 from app.config import settings
 from app.core.llm.client import LLMClient
@@ -19,6 +20,7 @@ _IMPORTANCE_WEIGHT = 0.15
 _LONG_TERM_BONUS = 0.05
 _LONG_TERM_RELIABILITY_WEIGHT = 1.1
 _DEFAULT_CONFIDENCE = 0.8
+_EXPIRED_DECAY = 0.5  # 已过期关系的可靠性权重衰减因子
 
 
 def _float(value: object, default: float) -> float:
@@ -26,6 +28,25 @@ def _float(value: object, default: float) -> float:
         return float(value if value is not None else default)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_dt(value: object) -> datetime | None:
+    """把 Neo4j 返回的时间字符串解析为 datetime（容错）。"""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, datetime):
+            return value
+        s = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_expired(invalid_at: object) -> bool:
+    """判断关系是否已过期（invalid_at 非空且 < 当前时间）。"""
+    dt = _parse_dt(invalid_at)
+    return dt is not None and dt < datetime.now()
 
 
 def _layer_weight(memory_layer: str | None) -> float:
@@ -159,6 +180,8 @@ async def search_memory(
                     "source_text": row.get("source_text"),
                     "confidence": _float(row.get("confidence"), _DEFAULT_CONFIDENCE),
                     "importance": _float(row.get("importance"), 0.5),
+                    "valid_at": row.get("valid_at"),
+                    "invalid_at": row.get("invalid_at"),
                 })
         results: list[dict] = []
         for eid, score, reliability_score in ranked:
@@ -239,7 +262,9 @@ async def search_memory(
 
 
 def format_memory_context(results: list[dict]) -> str:
-    """把检索结果拼成给 LLM 的记忆上下文文本（供问答 Agent 记忆工具复用）。"""
+    """把检索结果拼成给 LLM 的记忆上下文文本（供问答 Agent 记忆工具复用）。
+    已过期的关系标记 [已过期]，被取代的关系标记 [已更新]。
+    """
     if not results:
         return ""
     lines: list[str] = []
@@ -249,8 +274,15 @@ def format_memory_context(results: list[dict]) -> str:
         lines.append(head)
         for rel in r.get("relations", []):
             obj = rel.get("object_name") or ""
-            rel_prefix = "    · 待确认：" if _is_uncertain(rel.get("confidence")) else "    · "
-            lines.append(f"{rel_prefix}{r['name']} {rel['predicate']} {obj}")
+            # 过期标记优先
+            if _is_expired(rel.get("invalid_at")):
+                status = " [已过期]"
+            elif _is_uncertain(rel.get("confidence")):
+                status = " [待确认]"
+            else:
+                status = ""
+            rel_prefix = "    · "
+            lines.append(f"{rel_prefix}{r['name']} {rel['predicate']} {obj}{status}")
     return "\n".join(lines)
 
 

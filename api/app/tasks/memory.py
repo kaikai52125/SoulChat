@@ -13,7 +13,6 @@ from app.celery_app import celery_app
 from app.core.llm.resolver import get_client_for_type
 from app.core.logging import get_logger
 from app.core.memory.extraction.orchestrator import run_extraction
-from app.db import neo4j
 from app.db.postgres import create_task_engine
 from app.models.memory_model import (
     MEMORY_STATUS_DONE,
@@ -29,16 +28,18 @@ async def _run(memory_id: str) -> None:
     mem_uuid = uuid.UUID(memory_id)
     engine = create_task_engine()
     session_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    # 为每个任务创建独立的 Neo4j 驱动，避免 --pool=threads 事件循环冲突
+    from app.db.neo4j import create_driver as create_neo4j_driver
+    driver = create_neo4j_driver()
     try:
         async with session_maker() as session:
-            await _extract(session, mem_uuid)
+            await _extract(session, mem_uuid, driver)
     finally:
         await engine.dispose()
-        # 关闭本任务事件循环内创建的 Neo4j 驱动
-        await neo4j.close()
+        await driver.close()
 
 
-async def _extract(session: AsyncSession, mem_uuid: uuid.UUID) -> None:
+async def _extract(session: AsyncSession, mem_uuid: uuid.UUID, neo4j_driver=None) -> None:
     repo = MemoryRepository(session)
     memory = await repo.get_by_id(mem_uuid)
     if not memory:
@@ -60,6 +61,7 @@ async def _extract(session: AsyncSession, mem_uuid: uuid.UUID) -> None:
             source_message_id=(
                 str(memory.source_message_id) if memory.source_message_id else None
             ),
+            neo4j_driver=neo4j_driver,
         )
 
         memory.status = MEMORY_STATUS_DONE

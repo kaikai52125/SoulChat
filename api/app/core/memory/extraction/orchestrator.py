@@ -73,6 +73,7 @@ async def run_extraction(
     source: str = SOURCE_MANUAL,
     source_message_id: str | None = None,
     dialog_at: datetime | None = None,
+    neo4j_driver=None,
 ) -> ExtractionStats:
     """对一段文本执行完整萃取并写入图谱。"""
     stats = ExtractionStats()
@@ -154,11 +155,23 @@ async def run_extraction(
                 pending_events.append((ev, chunk_name_map))
 
     stats.statement_count = len(statements)
+
+    # 3.5 Statement 向量化：为每条陈述生成 embedding 存图（供后续语义去重消费）
+    if statements and embed_client:
+        try:
+            stmt_texts = [s.statement for s in statements]
+            stmt_vectors = await embedder.embed_texts(embed_client, stmt_texts)
+            for stmt_node, vec in zip(statements, stmt_vectors):
+                stmt_node.embedding = vec
+        except Exception as e:
+            logger.warning("Statement 向量化失败（不影响萃取继续）: %s", e)
+
     if not entity_pool:
         # 没抽到实体也写来源 + 陈述（保留溯源），关系/事件为空
         await _persist(
             dialogue=dialogue, chunks=chunks, statements=statements,
             entities=[], mentions=mentions, relations=[], events=[], involves=[],
+            neo4j_driver=neo4j_driver,
         )
         return stats
 
@@ -170,7 +183,7 @@ async def run_extraction(
     # 5. 批内去重 → id 重定向
     deduped, redirect1 = await dedup.dedup_within_batch(chat_client, entity_pool)
     # 6. 与图谱已有实体二层融合
-    repo = MemoryGraphRepository()
+    repo = MemoryGraphRepository(driver=neo4j_driver)
     final_entities, redirect2 = await dedup.merge_with_graph(
         chat_client, repo, user_id, deduped
     )
@@ -212,6 +225,44 @@ async def run_extraction(
         ))
     stats.relation_count = len(relations)
 
+    # 8.5 冲突检测（第一阶段）：检查新关系是否与图谱已有关系冲突
+    # 动态谓词 → 等 persist 后 supersede；非动态 → persist 后强制降实体置信度
+    _pending_supersede: list[tuple[str, str]] = []
+    _pending_confidence_lower: list[tuple[str, float]] = []  # (entity_id, new_confidence)
+    if relations:
+        from app.core.memory.ontology import PREDICATE_MUTABILITY
+
+        conflicts_to_review = 0
+        for rel in relations:
+            existing = await repo.find_conflicting_relations(
+                user_id, rel.source_id, rel.predicate, rel.target_id
+            )
+            if not existing:
+                continue
+            mutability = PREDICATE_MUTABILITY.get(rel.predicate, "semi-dynamic")
+            if mutability == "dynamic":
+                for old in existing:
+                    old_rel_id = old.get("relation_id")
+                    if old_rel_id:
+                        _pending_supersede.append((old_rel_id, rel.id))
+            elif mutability == "static":
+                rel.confidence = rel.confidence * 0.7
+                conflicts_to_review += 1
+                source_ent = final_by_id.get(rel.source_id)
+                if source_ent:
+                    _pending_confidence_lower.append((source_ent.id, rel.confidence))
+            else:
+                rel.confidence = rel.confidence * 0.85
+                conflicts_to_review += 1
+                source_ent = final_by_id.get(rel.source_id)
+                if source_ent:
+                    _pending_confidence_lower.append((source_ent.id, rel.confidence))
+        if _pending_supersede or conflicts_to_review:
+            logger.info(
+                "冲突检测: user=%s pending_supersede=%d to_review=%d",
+                user_id, len(_pending_supersede), conflicts_to_review,
+            )
+
     # 9. 事件 → Event 节点 + INVOLVES 边（按 participants 名字匹配到最终实体）
     events: list[EventNode] = []
     involves: list[InvolvesEdge] = []
@@ -243,8 +294,21 @@ async def run_extraction(
     await _persist(
         dialogue=dialogue, chunks=chunks, statements=statements,
         entities=final_entities, mentions=mentions, relations=relations,
-        events=events, involves=involves,
+        events=events, involves=involves, neo4j_driver=neo4j_driver,
     )
+
+    # 10.5 冲突检测（第二阶段）：persist 后执行 supersede + 强制降置信度
+    for old_rel_id, new_rel_id in _pending_supersede:
+        try:
+            await repo.mark_relation_superseded(user_id, old_rel_id, new_rel_id)
+        except Exception as e:
+            logger.warning("supersede 失败（跳过）: old=%s new=%s err=%s", old_rel_id, new_rel_id, e)
+    for entity_id, new_conf in _pending_confidence_lower:
+        try:
+            await repo.force_lower_entity_confidence(user_id, entity_id, new_conf)
+            logger.info("冲突审查-降置信度: entity=%s confidence=%.2f", entity_id, new_conf)
+        except Exception as e:
+            logger.warning("降置信度失败（跳过）: entity=%s err=%s", entity_id, e)
 
     # 11. 增量社区聚类（新实体归入社区；失败不影响萃取结果）
     try:
@@ -293,8 +357,9 @@ async def _persist(
     relations: list[RelationEdge],
     events: list[EventNode],
     involves: list[InvolvesEdge],
+    neo4j_driver=None,
 ) -> None:
-    repo = MemoryGraphRepository()
+    repo = MemoryGraphRepository(driver=neo4j_driver)
     await repo.save_graph(
         dialogues=[dialogue], chunks=chunks, statements=statements,
         entities=entities, events=events, mentions=mentions,

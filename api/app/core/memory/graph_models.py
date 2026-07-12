@@ -28,6 +28,7 @@ LABEL_ENTITY = "Entity"
 LABEL_EVENT = "Event"
 LABEL_COMMUNITY = "Community"
 LABEL_INSIGHT = "Insight"
+LABEL_CORRECTION_RECORD = "CorrectionRecord"  # 人类修正免疫记录
 
 # ── 关系类型 ──
 REL_HAS_CHUNK = "HAS_CHUNK"  # Dialogue → Chunk
@@ -37,6 +38,9 @@ REL_RELATION = "RELATION"  # Entity → Entity（三元组）
 REL_INVOLVES = "INVOLVES"  # Event → Entity
 REL_IN_COMMUNITY = "IN_COMMUNITY"  # Entity → Community
 REL_DERIVED_FROM = "DERIVED_FROM"  # Insight → Entity（洞察归纳自哪些实体）
+REL_SUPERSEDES = "SUPERSEDES"  # RELATION → RELATION（新关系取代旧关系）
+REL_CONTRADICTS = "CONTRADICTS"  # Statement/RELATION → Statement/RELATION（矛盾）
+REL_SEMANTICALLY_SIMILAR_TO = "SEMANTICALLY_SIMILAR_TO"  # Statement → Statement（语义去重）
 
 # ── 记忆来源 ──
 SOURCE_AUTO = "auto"  # 对话自动萃取

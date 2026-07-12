@@ -65,9 +65,31 @@ def is_valid_predicate(p: str | None) -> bool:
     return (p or "").strip() in PREDICATES
 
 
+# ── 谓词变更特性分类（驱动冲突自动/手动仲裁）──
+# static: 几乎不变，出现冲突说明有严重问题 → 推人类审查
+# dynamic: 可随时间变化（搬家、换工作、换工具）→ 新事实自动 supersede 旧事实
+# semi-dynamic: 偶尔缓慢变化（偏好、弱关联）→ 不自动 supersede，降低置信度
+PREDICATE_MUTABILITY: dict[str, str] = {
+    "别名属于": "static",
+    "属于类型": "dynamic",
+    "位于": "dynamic",
+    "前往": "static",
+    "组成部分": "static",
+    "拥有": "semi-dynamic",
+    "使用": "dynamic",
+    "创建了": "static",
+    "了解": "dynamic",
+    "偏好": "semi-dynamic",
+    "负责": "dynamic",
+    "沟通于": "static",
+    "关联于": "semi-dynamic",
+}
+
+
 __all__ = [
     "ENTITY_TYPES",
     "PREDICATES",
+    "PREDICATE_MUTABILITY",
     "UNKNOWN_ENTITY_TYPE",
     "UNKNOWN_PREDICATE",
     "normalize_entity_type",

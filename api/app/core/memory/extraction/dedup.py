@@ -134,12 +134,38 @@ async def merge_with_graph(
 
     命中已有实体则把本次实体 id 重定向到已有 id（复用图节点），
     并把新别名/描述补进该实体。返回（待写入实体, id 重定向表 new_id->existing_id）。
+
+    同时检查 CorrectionRecord：人类已删除/修正的实体将被阻止重新创建。
     """
     redirect: dict[str, str] = {}
     out: list[EntityNode] = []
+    skipped: set[str] = set()  # 被免疫记忆阻止的实体 id
     cache: dict[str, list[dict]] = {}  # 按类型缓存已有实体，减少查询
 
     for ent in entities:
+        # ── CorrectionRecord 免疫检查 ──
+        try:
+            correction = await repo.check_correction_record(
+                user_id, ent.name, ent.type
+            )
+            if correction is not None:
+                action = correction.get("action", "")
+                if action == "delete":
+                    # 人类已删除 → 跳过此实体，不创建
+                    skipped.add(ent.id)
+                    logger.debug("免疫记忆阻止: entity=%s type=%s action=delete", ent.name, ent.type)
+                    continue
+                elif action == "correct":
+                    corrected_to = correction.get("corrected_to", "")
+                    if corrected_to and corrected_to.strip():
+                        # 人类已修正 → 自动使用修正后的名称
+                        old_name = ent.name
+                        ent.name = corrected_to.strip()
+                        logger.debug("免疫记忆自动修正: %s → %s", old_name, ent.name)
+                # confirm → 正常处理，不阻止
+        except Exception as e:
+            logger.warning("CorrectionRecord 查询失败（忽略，继续去重）: %s", e)
+
         if ent.type not in cache:
             cache[ent.type] = await repo.list_entities_by_type(user_id, ent.type)
         existing = cache[ent.type]
@@ -196,6 +222,9 @@ async def merge_with_graph(
             out.append(existing_node)
         else:
             out.append(ent)
+
+    if skipped:
+        logger.info("免疫记忆: user=%s 阻止了 %d 个实体", user_id, len(skipped))
 
     return out, redirect
 

@@ -9,7 +9,11 @@
 - `description` 必须使用中文，简洁、能区分实体。
 - `type` 必须使用下方预定义的中文实体类型标签；`predicate` 必须使用下方预定义的中文关系谓词标签；不要发明新类型/新谓词。
 - 每个 triplet 必须输出 `predicate_surface`：原文中表达该关系的关系短语；没有更贴近的就用 canonical `predicate`。
-- 每个 triplet 必须携带 `valid_at` 和 `invalid_at`，直接复制输入中的同名字段，不要自行推断。
+- 每个 triplet 必须携带 `valid_at` 和 `invalid_at`。从陈述语义中推断时间范围：
+  - 若陈述暗示状态开始时间（如"最近在学""刚入职""今年开始"）→ `valid_at` 填入 ISO8601 时间（以 `dialog_at` 为参考锚点），`invalid_at` 填 NULL
+  - 若陈述暗示状态已结束（如"之前在""以前是""曾经"）→ `valid_at` 填 NULL，`invalid_at` 填入 ISO8601 时间
+  - 若无时间暗示（如"喜欢咖啡""地球是圆的"）→ 都填 NULL
+  - **不确定就填 NULL，禁止凭空编造时间**；`dialog_at` 仅供参考，不要直接复制
 - 每个实体和每个 triplet 都要输出 `importance`（0~1，对用户长期画像的重要度：核心身份/关系/目标高，琐碎临时低）和 `confidence`（0~1，信息确定性：明确陈述高，推测模糊低）。
 
 ===输入===
