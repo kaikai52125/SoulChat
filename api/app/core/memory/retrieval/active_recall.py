@@ -100,8 +100,10 @@ async def _do_recall(
             logger.warning("主动召回-洞察失败（忽略）: %s", e)
             return []
 
-    async def _recall_entities() -> list[str]:
+    async def _recall_entities_full() -> tuple[list[str], list[dict]]:
+        """返回 (格式化文本行, 原始检索结果)。原始结果用于社区摘要提取。"""
         lines: list[str] = []
+        hits: list[dict] = []
         try:
             hits = await search_memory(
                 embed_client=embed_client,
@@ -136,12 +138,29 @@ async def _do_recall(
                     lines.append(f"  · {name} {rel.get('predicate', '')} {obj}{status}")
         except Exception as e:
             logger.warning("主动召回-记忆失败（忽略）: %s", e)
-        return lines
+        return lines, hits
 
     # 2. 两路并行
-    insight_lines, memory_lines = await asyncio.gather(
-        _recall_insights(), _recall_entities()
+    insight_lines, (memory_lines, entity_hits) = await asyncio.gather(
+        _recall_insights(), _recall_entities_full()
     )
+
+    # 3. 从实体检索结果中提取社区摘要（≥2 个实体命中同一社区才注入）
+    community_lines: list[str] = []
+    try:
+        comm_counter: dict[str, tuple[str, str]] = {}  # community_id → (name, summary)
+        comm_entity_count: dict[str, int] = {}  # community_id → 命中实体数
+        for h in entity_hits:
+            comm = h.get("community")
+            if comm and comm.get("id"):
+                cid = comm["id"]
+                comm_counter[cid] = (comm.get("name", ""), comm.get("summary", ""))
+                comm_entity_count[cid] = comm_entity_count.get(cid, 0) + 1
+        for cid, (name, summary) in comm_counter.items():
+            if comm_entity_count.get(cid, 0) >= 2 and summary:
+                community_lines.append(f"· {name}：{summary}" if name else f"· {summary}")
+    except Exception as e:
+        logger.warning("主动召回-社区摘要提取失败（忽略）: %s", e)
 
     if not insight_lines and not memory_lines:
         return ""
@@ -150,6 +169,9 @@ async def _do_recall(
         "【关于用户的已知信息（供参考，可自然融入回答，不必刻意提及；"
         "待确认内容不要当作确定事实，回答时应表达不确定或向用户确认）】"
     ]
+    if community_lines:
+        parts.append("相关主题：")
+        parts.extend(community_lines)
     if insight_lines:
         parts.append("我对用户的理解：" + "；".join(insight_lines))
     if memory_lines:
@@ -160,8 +182,8 @@ async def _do_recall(
     if len(block) > settings.active_recall_max_chars:
         block = block[: settings.active_recall_max_chars] + "…"
     logger.info(
-        "主动召回命中: user=%s 洞察=%d 记忆行=%d",
-        user_id, len(insight_lines), len(memory_lines),
+        "主动召回命中: user=%s 洞察=%d 社区=%d 记忆行=%d",
+        user_id, len(insight_lines), len(community_lines), len(memory_lines),
     )
     return block
 

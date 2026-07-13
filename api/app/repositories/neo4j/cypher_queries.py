@@ -187,6 +187,7 @@ RETURN node.id AS id, node.name AS name, node.type AS type,
        coalesce(node.importance, 0.5) AS importance,
        coalesce(node.confidence, 0.8) AS confidence,
        coalesce(node.memory_layer, 'short_term') AS memory_layer,
+       node.community_id AS community_id,
        score
 """
 
@@ -201,6 +202,7 @@ RETURN node.id AS id, node.name AS name, node.type AS type,
        coalesce(node.importance, 0.5) AS importance,
        coalesce(node.confidence, 0.8) AS confidence,
        coalesce(node.memory_layer, 'short_term') AS memory_layer,
+       node.community_id AS community_id,
        score
 LIMIT $top_k
 """
@@ -423,7 +425,8 @@ LIMIT 50
 # 写社区元数据
 COMMUNITY_UPDATE_META = """
 MATCH (c:Community {user_id: $user_id, id: $community_id})
-SET c.name = $name, c.summary = $summary
+SET c.name = $name, c.summary = $summary,
+    c.embedding = $embedding
 RETURN c.id AS id
 """
 
@@ -698,6 +701,29 @@ WHERE node.user_id = $user_id
 RETURN node.id AS id, node.theme AS theme, node.content AS content,
        coalesce(node.importance, 0.6) AS importance,
        coalesce(node.confidence, 0.7) AS confidence, score
+"""
+
+# ── 社区检索：向量召回 + 批量取 + 实体社区上下文 ──
+
+COMMUNITY_VECTOR_SEARCH = """
+CALL db.index.vector.queryNodes('community_embedding_index', $top_k, $vector)
+YIELD node, score
+WHERE node.user_id = $user_id
+RETURN node.id AS id, node.name AS name, node.summary AS summary, score
+"""
+
+COMMUNITY_GET_BY_IDS = """
+MATCH (c:Community {user_id: $user_id})
+WHERE c.id IN $ids
+RETURN c.id AS id, c.name AS name, c.summary AS summary
+"""
+
+ENTITY_COMMUNITY_CONTEXT = """
+MATCH (e:Entity {user_id: $user_id})
+WHERE e.id IN $entity_ids AND e.community_id IS NOT NULL
+MATCH (c:Community {user_id: $user_id, id: e.community_id})
+RETURN e.id AS entity_id, c.id AS community_id, c.name AS community_name,
+       c.summary AS community_summary
 """
 
 # ── 冲突审查：降低实体置信度（绕过 ENTITY_SAVE 的 max 逻辑）──

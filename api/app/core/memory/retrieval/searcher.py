@@ -12,10 +12,11 @@ from app.repositories.neo4j.memory_graph_repository import MemoryGraphRepository
 
 logger = get_logger(__name__)
 
-# 融合权重（向量为主，全文为辅，重要度为附加加权）
-_VECTOR_WEIGHT = 0.55
-_FULLTEXT_WEIGHT = 0.30
-_IMPORTANCE_WEIGHT = 0.15
+# 融合权重（向量为主，全文为辅，社区为间接信号，重要度为附加加权）
+_VECTOR_WEIGHT = 0.45
+_FULLTEXT_WEIGHT = 0.25
+_COMMUNITY_WEIGHT = 0.10
+_IMPORTANCE_WEIGHT = 0.20
 # 长期记忆轻微加权（更稳定的记忆优先）
 _LONG_TERM_BONUS = 0.05
 _LONG_TERM_RELIABILITY_WEIGHT = 1.1
@@ -115,11 +116,17 @@ async def search_memory(
     repo = MemoryGraphRepository()
     uid = str(user_id)
 
+    # 0. 查询向量化（一次 embedding，三路召回复用）
+    try:
+        qvec = query_vector if query_vector is not None else await embed_client.embed_one(query)
+    except Exception as e:
+        logger.warning("查询向量化失败: %s", e)
+        return []
+
     # 1. 向量召回
     vec_hits: dict[str, dict] = {}
     vec_scores: dict[str, float] = {}
     try:
-        qvec = query_vector if query_vector is not None else await embed_client.embed_one(query)
         rows = await repo.search_entities_by_vector(uid, qvec, recall_size)
         for r in rows:
             vec_hits[r["id"]] = r
@@ -138,6 +145,32 @@ async def search_memory(
     except Exception as e:
         logger.warning("记忆全文召回失败: %s", e)
 
+    # 2.5. Community 向量召回（复用 qvec，失败降级）
+    comm_scores: dict[str, float] = {}
+    comm_entity_ids: set[str] = set()
+    try:
+        comm_rows = await repo.search_communities_by_vector(uid, qvec, recall_size)
+        for cr in comm_rows:
+            cid = cr["id"]
+            comm_scores[cid] = float(cr.get("score", 0.0))
+        # 取命中社区的成员实体 id → 用于后续加权
+        if comm_scores:
+            all_candidate_ids = [r["id"] for r in vec_hits.values()] + [r["id"] for r in ft_hits.values()]
+            if all_candidate_ids:
+                comm_members = await repo.get_entity_community_context(uid, all_candidate_ids)
+                # 构建 community_id → set[entity_id] 反向索引（仅对已在候选集中的实体）
+                cid_to_entities: dict[str, set[str]] = {}
+                for cm in comm_members:
+                    c_id = cm.get("community_id")
+                    e_id = cm.get("entity_id")
+                    if c_id and e_id:
+                        cid_to_entities.setdefault(c_id, set()).add(e_id)
+                # 标记社区命中对应的实体
+                for cid in comm_scores:
+                    comm_entity_ids.update(cid_to_entities.get(cid, set()))
+    except Exception as e:
+        logger.warning("记忆社区向量召回失败（降级仅实体召回）: %s", e)
+
     if not vec_hits and not ft_hits:
         return []
 
@@ -154,6 +187,12 @@ async def search_memory(
         }
         if not kept:
             return []
+        # Community boost in exact mode: 命中社区的实体微弱加权
+        comm_n = _normalize(comm_scores)
+        for eid in list(kept.keys()):
+            if eid in comm_entity_ids:
+                cid = all_hits[eid].get("community_id") or ""
+                kept[eid] = kept[eid] + _COMMUNITY_WEIGHT * comm_n.get(cid, 0.0)
         ranked = _rank_memory_hits(
             all_hits,
             kept,
@@ -183,6 +222,18 @@ async def search_memory(
                     "valid_at": row.get("valid_at"),
                     "invalid_at": row.get("invalid_at"),
                 })
+        # 取实体社区上下文（供结果附带社区名+摘要）
+        comm_ctx: dict[str, dict | None] = {eid: None for eid in top_ids}
+        try:
+            comm_rows = await repo.get_entity_community_context(uid, top_ids)
+            for cr in comm_rows:
+                comm_ctx[cr["entity_id"]] = {
+                    "id": cr.get("community_id"),
+                    "name": cr.get("community_name"),
+                    "summary": cr.get("community_summary"),
+                }
+        except Exception as e:
+            logger.warning("取实体社区上下文失败（忽略）: %s", e)
         results: list[dict] = []
         for eid, score, reliability_score in ranked:
             src = all_hits[eid]
@@ -197,17 +248,24 @@ async def search_memory(
                 "memory_layer": src.get("memory_layer") or "short_term",
                 "score": round(score, 4),
                 "reliability_score": round(reliability_score, 4),
+                "community": comm_ctx.get(eid),
                 "relations": relations_by_entity.get(eid, []),
             })
         return results
 
     vec_n = _normalize(vec_scores)
     ft_n = _normalize(ft_scores)
+    comm_n = _normalize(comm_scores)
     fused: dict[str, float] = {}
     for eid in all_hits:
         base = _VECTOR_WEIGHT * vec_n.get(eid, 0.0) + _FULLTEXT_WEIGHT * ft_n.get(eid, 0.0)
+        # Community 加权：实体所属社区被社区向量召回命中时给予微弱加成
+        community_boost = 0.0
+        if eid in comm_entity_ids:
+            cid = all_hits[eid].get("community_id") or ""
+            community_boost = _COMMUNITY_WEIGHT * comm_n.get(cid, 0.0)
         importance = float(all_hits[eid].get("importance", 0.5) or 0.5)
-        score = base + _IMPORTANCE_WEIGHT * importance
+        score = base + community_boost + _IMPORTANCE_WEIGHT * importance
         if not use_reliability_score and (all_hits[eid].get("memory_layer") or "") == "long_term":
             score += _LONG_TERM_BONUS
         fused[eid] = score
@@ -242,6 +300,19 @@ async def search_memory(
                 "importance": _float(row.get("importance"), 0.5),
             })
 
+    # 取实体社区上下文（供结果附带社区名+摘要）
+    comm_ctx: dict[str, dict | None] = {eid: None for eid in top_ids}
+    try:
+        comm_rows = await repo.get_entity_community_context(uid, top_ids)
+        for cr in comm_rows:
+            comm_ctx[cr["entity_id"]] = {
+                "id": cr.get("community_id"),
+                "name": cr.get("community_name"),
+                "summary": cr.get("community_summary"),
+            }
+    except Exception as e:
+        logger.warning("取实体社区上下文失败（忽略）: %s", e)
+
     results: list[dict] = []
     for eid, score, reliability_score in ranked:
         src = all_hits[eid]
@@ -256,6 +327,7 @@ async def search_memory(
             "memory_layer": src.get("memory_layer") or "short_term",
             "score": round(score, 4),
             "reliability_score": round(reliability_score, 4),
+            "community": comm_ctx.get(eid),
             "relations": relations_by_entity.get(eid, []),
         })
     return results
@@ -264,11 +336,30 @@ async def search_memory(
 def format_memory_context(results: list[dict]) -> str:
     """把检索结果拼成给 LLM 的记忆上下文文本（供问答 Agent 记忆工具复用）。
     已过期的关系标记 [已过期]，被取代的关系标记 [已更新]。
+    同社区实体合并标注 【社区名】 前置行。
     """
     if not results:
         return ""
+    # 按 community_id 分组（用于合并同社区标注）
+    community_groups: dict[str, list[int]] = {}  # cid → [result_indices]
+    for i, r in enumerate(results):
+        comm = r.get("community")
+        if comm and comm.get("id"):
+            community_groups.setdefault(comm["id"], []).append(i)
+    # 记录每个社区是否已输出标注行
+    emitted: set[str] = set()
     lines: list[str] = []
-    for r in results:
+    for i, r in enumerate(results):
+        comm = r.get("community")
+        cid = comm.get("id") if comm else None
+        if cid and cid not in emitted and comm.get("name"):
+            # 同社区多实体时合并为一个标注行（首个实体前输出）
+            emitted.add(cid)
+            peer_count = len(community_groups.get(cid, [1]))
+            if peer_count > 1:
+                lines.append(f"【{comm['name']}】（{peer_count} 条相关记忆）")
+            else:
+                lines.append(f"【{comm['name']}】")
         prefix = "- 待确认：" if _is_uncertain(r.get("confidence")) else "- "
         head = f"{prefix}{r['name']}（{r['type']}）：{r.get('description') or ''}".rstrip("：")
         lines.append(head)

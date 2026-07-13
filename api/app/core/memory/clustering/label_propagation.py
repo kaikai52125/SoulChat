@@ -49,9 +49,10 @@ def _weighted_vote(
 class LabelPropagationEngine:
     """标签传播聚类引擎。"""
 
-    def __init__(self, chat_client: LLMClient | None = None):
+    def __init__(self, chat_client: LLMClient | None = None, embed_client: LLMClient | None = None):
         self.repo = CommunityRepository()
         self.chat_client = chat_client  # 可选，用于生成社区名/摘要
+        self.embed_client = embed_client  # 可选，用于社区 summary 向量化
 
     async def run(self, user_id: str, new_entity_ids: list[str] | None = None) -> None:
         """统一入口：无社区→全量；有社区且给了新实体→增量。"""
@@ -158,7 +159,7 @@ class LabelPropagationEngine:
         return [cid for cid in community_ids if cid not in merged_into]
 
     async def _generate_metadata(self, user_id: str, community_ids: list[str]) -> None:
-        """为社区生成名称+摘要。有 chat 模型走 LLM，否则成员名拼接兜底。"""
+        """为社区生成名称+摘要+embedding。有 chat 模型走 LLM，否则成员名拼接兜底。"""
         for cid in community_ids:
             members = await self.repo.get_members(user_id, cid)
             if not members:
@@ -168,7 +169,15 @@ class LabelPropagationEngine:
             summary = f"包含实体：{', '.join(names[:10])}"
             if self.chat_client and names:
                 name, summary = await self._llm_meta(cid, members)
-            await self.repo.update_metadata(user_id, cid, name, summary)
+            # 生成社区 embedding（name + summary 拼接向量化）
+            embedding: list[float] | None = None
+            if self.embed_client:
+                try:
+                    embed_text = f"{name}：{summary}"
+                    embedding = await self.embed_client.embed_one(embed_text)
+                except Exception as e:
+                    logger.warning("社区 embedding 生成失败（跳过 cid=%s）: %s", cid, e)
+            await self.repo.update_metadata(user_id, cid, name, summary, embedding=embedding)
 
     async def _llm_meta(self, cid: str, members: list[dict]) -> tuple[str, str]:
         entity_lines = []

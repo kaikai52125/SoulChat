@@ -103,6 +103,12 @@ _VECTOR_INDEXES = [
         f"OPTIONS {{ indexConfig: {{ `vector.dimensions`: {VECTOR_DIMS}, "
         f"`vector.similarity_function`: 'cosine' }} }}"
     ),
+    (
+        f"CREATE VECTOR INDEX community_embedding_index IF NOT EXISTS "
+        f"FOR (n:{LABEL_COMMUNITY}) ON n.embedding "
+        f"OPTIONS {{ indexConfig: {{ `vector.dimensions`: {VECTOR_DIMS}, "
+        f"`vector.similarity_function`: 'cosine' }} }}"
+    ),
 ]
 
 

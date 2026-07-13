@@ -88,7 +88,8 @@ class CommunityRepository:
             return [dict(r) async for r in result]
 
     async def update_metadata(
-        self, user_id: str, community_id: str, name: str, summary: str
+        self, user_id: str, community_id: str, name: str, summary: str,
+        embedding: list[float] | None = None,
     ) -> None:
         async with self._driver.session() as session:
             await session.run(
@@ -97,6 +98,7 @@ class CommunityRepository:
                 community_id=community_id,
                 name=name,
                 summary=summary,
+                embedding=embedding,
             )
 
     async def list_communities(self, user_id: str) -> list[dict[str, Any]]:

@@ -177,6 +177,7 @@ class CommunityNode(BaseModel):
     name: str
     summary: str = ""
     member_count: int = 0
+    embedding: list[float] | None = None
     created_at: datetime = Field(default_factory=_now)
 
 

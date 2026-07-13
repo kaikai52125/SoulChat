@@ -610,6 +610,49 @@ class MemoryGraphRepository:
             )
             return [dict(r) async for r in result]
 
+    # ── 社区检索：向量召回 / 批量取 / 实体社区上下文 ──
+
+    async def search_communities_by_vector(
+        self, user_id: str, vector: list[float], top_k: int
+    ) -> list[dict[str, Any]]:
+        """社区向量召回（供检索链路的 Community 通路）。"""
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.COMMUNITY_VECTOR_SEARCH,
+                user_id=user_id,
+                vector=vector,
+                top_k=top_k,
+            )
+            return [dict(r) async for r in result]
+
+    async def get_communities_by_ids(
+        self, user_id: str, ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """批量取社区 name + summary（供召回上下文注入）。"""
+        if not ids:
+            return []
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.COMMUNITY_GET_BY_IDS,
+                user_id=user_id,
+                ids=ids,
+            )
+            return [dict(r) async for r in result]
+
+    async def get_entity_community_context(
+        self, user_id: str, entity_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """取一批实体的社区归属信息（供检索结果附带社区名+摘要）。"""
+        if not entity_ids:
+            return []
+        async with self._driver.session() as session:
+            result = await session.run(
+                cq.ENTITY_COMMUNITY_CONTEXT,
+                user_id=user_id,
+                entity_ids=entity_ids,
+            )
+            return [dict(r) async for r in result]
+
     # ── 冲突审查：强制降低实体置信度（绕过 ENTITY_SAVE 的 max）──
 
     async def force_lower_entity_confidence(

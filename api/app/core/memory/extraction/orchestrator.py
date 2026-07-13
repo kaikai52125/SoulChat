@@ -314,7 +314,7 @@ async def run_extraction(
     try:
         from app.core.memory.clustering.label_propagation import LabelPropagationEngine
 
-        engine = LabelPropagationEngine(chat_client=chat_client)
+        engine = LabelPropagationEngine(chat_client=chat_client, embed_client=embed_client)
         await engine.run(user_id, new_entity_ids=stats.entity_ids)
     except Exception as e:
         logger.warning("增量社区聚类失败（忽略）: %s", e)
