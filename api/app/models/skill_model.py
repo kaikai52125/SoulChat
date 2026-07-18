@@ -58,7 +58,7 @@ class Skill(Base):
     # 是否在对话页技能选择器中显示
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 来源：'builtin' | 'custom' | 'imported'
-    source: Mapped[str] = mapped_column(String(10), default="custom")
+    source: Mapped[str] = mapped_column(String(16), default="custom")
     # zip 导入时的去重指纹（SHA256(manifest + prompt)）
     import_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 是否公开到技能市场（其他用户可浏览并复制到自己的角色）

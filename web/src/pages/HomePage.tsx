@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Col, Modal, Row, Tag, Tooltip } from 'antd'
+import { Badge, Button, Card, Col, Modal, Row, Tag, Tooltip } from 'antd'
 import {
   ArrowRightOutlined,
   BookOutlined,
@@ -10,6 +10,7 @@ import {
   DeploymentUnitOutlined,
   ExperimentOutlined,
   HddOutlined,
+  ReadOutlined,
   RightOutlined,
   SettingOutlined,
   ThunderboltOutlined,
@@ -52,6 +53,7 @@ export default function HomePage() {
   const [emotion, setEmotion] = useState<EmotionProfile | null>(null)
   const [insights, setInsights] = useState<Insight[]>([])
   const [recentReport, setRecentReport] = useState<ReportBrief | null>(null)
+  const [diaryUnread, setDiaryUnread] = useState(0)
 
   const closeWelcome = () => {
     localStorage.setItem(WELCOME_SEEN_KEY, '1')
@@ -113,6 +115,11 @@ export default function HomePage() {
           setRecentReport(first)
         })
         .catch(() => {})
+      import('@/api/personaDiary').then(({ personaDiaryApi }) =>
+        personaDiaryApi.getUnreadCount().then((count) => {
+          if (!cancelled) setDiaryUnread(count)
+        }).catch(() => {}),
+      )
     })()
 
     return () => {
@@ -586,6 +593,19 @@ export default function HomePage() {
         // 每个有条件卡片在没数据时自动不渲染,新用户不会看到空卡
         <>
           {reviewCard}
+          {diaryUnread > 0 && (
+            <Card
+              title={<><ReadOutlined /> 今日日记</>}
+              style={{ marginBottom: 22, borderRadius: 16, borderColor: '#e8b4b8' }}
+              extra={<Badge count={diaryUnread} size="small" />}
+              hoverable
+              onClick={() => navigate('/diaries')}
+            >
+              <p style={{ margin: 0, color: '#475467' }}>
+                你的角色们写了 {diaryUnread} 篇新日记，去看看他们眼中的你吧 💭
+              </p>
+            </Card>
+          )}
           {insightsCard}
           {recentResearchCard}
           {finishedSteps < quickSteps.length && quickStartCard}

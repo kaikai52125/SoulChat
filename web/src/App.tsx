@@ -1,4 +1,6 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { Spin } from 'antd'
 import MainLayout from './layouts/MainLayout'
 import HomePage from './pages/HomePage'
 import LoginPage from './pages/LoginPage'
@@ -25,6 +27,13 @@ import JoinGroupPage from './pages/JoinGroupPage'
 import TracesPage from './pages/TracesPage'
 import RequireAuth from './components/RequireAuth'
 import ErrorBoundary from './components/ErrorBoundary'
+
+const DiaryPage = lazy(() => import('./pages/DiaryPage'))
+const MarketPage = lazy(() => import('./pages/MarketPage'))
+
+function LazyPage({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<Spin style={{ display: 'block', textAlign: 'center', padding: 80 }} />}>{children}</Suspense>
+}
 
 // 阶段1：登录页 + 路由守卫；主布局需登录后访问
 export default function App() {
@@ -58,6 +67,8 @@ export default function App() {
             <Route path="search" element={<SearchPage />} />
             <Route path="favorites" element={<FavoritesPage />} />
             <Route path="traces" element={<TracesPage />} />
+            <Route path="diaries" element={<LazyPage><DiaryPage /></LazyPage>} />
+            <Route path="market" element={<LazyPage><MarketPage /></LazyPage>} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="settings/models" element={<ModelConfigPage />} />
             <Route path="settings/agent" element={<AgentConfigPage />} />

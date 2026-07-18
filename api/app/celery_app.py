@@ -24,6 +24,7 @@ celery_app = Celery(
         "app.tasks.music",
         "app.tasks.beat",
         "app.tasks.agent_task",
+        "app.tasks.persona_diary",
     ],
 )
 
@@ -77,6 +78,10 @@ celery_app.conf.update(
         "cleanup-correction-records": {
             "task": "app.tasks.beat.cleanup_correction_records",
             "schedule": crontab(hour=5, minute=0),  # 每天凌晨 5:00 免疫记录清理（30天TTL）
+        },
+        "generate-persona-diaries": {
+            "task": "app.tasks.persona_diary.generate_persona_diaries",
+            "schedule": crontab(hour=23, minute=0),  # 每天 23:00 生成角色日记
         },
     },
 )

@@ -31,6 +31,18 @@ export interface Persona {
   human_mode: boolean
   show_avatar: boolean
   allow_agent_call: boolean
+
+  // 市场
+  cloned_from_id: string | null
+  clone_count: number
+  is_listed: boolean
+
+  // 成长摘要（列表接口返回，详情需调 /personas/{id}/growth）
+  growth?: {
+    level: number
+    xp: number
+    intimacy: number
+  }
 }
 
 export interface PersonaPayload {

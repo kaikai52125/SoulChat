@@ -76,6 +76,16 @@ class AgentPersona(Base):
     # ── 状态 ──
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     in_group_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    # ── 市场 ──
+    # 从哪个市场角色 fork 来的（NULL = 原创）
+    cloned_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    # 被其他用户从市场导入的次数
+    clone_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 是否已上架市场（快捷标记，实际以 persona_market_listings.is_active 为准）
+    is_listed: Mapped[bool] = mapped_column(Boolean, default=False)
+
     sort: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -58,6 +58,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   images?: string[]
+  sender_persona_id?: string | null
+  sender_name?: string | null
   meta_data: {
     citations?: Citation[]
     tool_calls?: ToolCall[]

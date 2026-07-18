@@ -347,6 +347,31 @@ class ChatService:
 
         return "\n\n".join(parts)
 
+    @staticmethod
+    async def _get_trait_instructions(
+        persona_id, user_id
+    ) -> str:
+        """获取角色已解锁特质的注入提示词。需要 DB session，故独立为 async 方法。"""
+        try:
+            from app.core.persona.trait_config import render_trait_instructions
+            from app.db.postgres import SessionLocal
+            from app.models.persona_growth_model import PersonaGrowth
+            from sqlalchemy import select
+
+            async with SessionLocal() as s:
+                result = await s.execute(
+                    select(PersonaGrowth).where(
+                        PersonaGrowth.persona_id == persona_id,
+                        PersonaGrowth.user_id == user_id,
+                    )
+                )
+                growth = result.scalar_one_or_none()
+                if growth and growth.unlocked_traits:
+                    return render_trait_instructions(growth.unlocked_traits)
+        except Exception:
+            pass
+        return ""
+
     async def stream_chat(
         self, user_id: uuid.UUID, body: ChatStreamRequest, skip_user_message: bool = False
     ) -> AsyncGenerator[str, None]:
@@ -620,6 +645,15 @@ class ChatService:
                     if not skip_user_message:
                         svc._dispatch_emotion(user_id, user_text, conv_id, assistant_msg.id)
 
+                    # 角色成长记录（fire-and-forget，不阻塞 SSE 流）
+                    if persona_id is not None:
+                        _spawn_bg(svc._record_growth(
+                            persona_id=persona_id,
+                            user_id=user_id,
+                            conversation_turn_count=len(tool_calls) + 1,
+                            used_tools=len(tool_calls) > 0,
+                        ))
+
                     # 先清缓冲再广播 done：保证「订阅时缓冲若仍在=done 尚未发出」，
                     # 重连方据此不会订到一个已结束、done 已错过的频道而空等（见 resume_events）。
                     await bus.clear_stream_buffer(cid)
@@ -702,6 +736,11 @@ class ChatService:
             self.session, user_id, temperature=temperature, streaming=True
         )
         base_prompt = self._compose_system_prompt(persona, active_skills)
+        # 注入已解锁特质提示词
+        if persona is not None:
+            trait_instr = await self._get_trait_instructions(persona.id, user_id)
+            if trait_instr:
+                base_prompt = base_prompt + "\n\n" + trait_instr
         stats_holder: dict[str, dict] = {}
         composed_text = _compose_with_attachments(user_text, attachments)
 
@@ -1015,6 +1054,35 @@ class ChatService:
             extract_memory_task.delay(str(memory.id))
         except Exception as e:
             logger.warning("对话记忆萃取派发失败（忽略）: %s", e)
+
+    async def _record_growth(
+        self,
+        *,
+        persona_id: uuid.UUID,
+        user_id: uuid.UUID,
+        conversation_turn_count: int = 1,
+        used_tools: bool = False,
+    ) -> None:
+        """记录角色成长数据（fire-and-forget，失败不影响聊天）。"""
+        try:
+            from app.services.persona_growth_service import PersonaGrowthService
+
+            async with SessionLocal() as session:
+                svc = PersonaGrowthService(session)
+                result = await svc.record_interaction(
+                    persona_id=persona_id,
+                    user_id=user_id,
+                    conversation_turn_count=conversation_turn_count,
+                    used_tools=used_tools,
+                )
+                if result["did_level_up"]:
+                    logger.info(
+                        "角色升级: persona=%s user=%s %d→%d xp=%d",
+                        persona_id, user_id,
+                        result["level_before"], result["level_after"], result["new_xp"],
+                    )
+        except Exception as e:
+            logger.warning("角色成长记录失败（忽略）: persona=%s err=%s", persona_id, e)
 
     async def _ingest_chat_images(
         self, user_id: uuid.UUID, image_keys: list[str]

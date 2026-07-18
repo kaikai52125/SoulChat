@@ -16,10 +16,12 @@ import {
   MoreOutlined,
   PictureOutlined,
   PlusOutlined,
+  ReadOutlined,
   RobotOutlined,
   SearchOutlined,
   SettingOutlined,
   ShareAltOutlined,
+  ShoppingOutlined,
   StarOutlined,
   TeamOutlined,
   ToolOutlined,
@@ -62,6 +64,8 @@ const menuItems = [
       { key: '/memory', icon: <HddOutlined />, label: '记忆' },
       { key: '/graph', icon: <DeploymentUnitOutlined />, label: '知识图谱' },
       { key: '/music', icon: <CustomerServiceOutlined />, label: '音乐' },
+      { key: '/diaries', icon: <ReadOutlined />, label: '角色日记' },
+      { key: '/market', icon: <ShoppingOutlined />, label: '角色市场' },
     ],
   },
   {
@@ -152,6 +156,25 @@ export default function MainLayout() {
     }
   }, [location.pathname])
 
+  // 角色日记未读红点
+  const [unreadDiaries, setUnreadDiaries] = useState(0)
+  useEffect(() => {
+    let alive = true
+    const fetchUnread = () => {
+      import('@/api/personaDiary').then(({ personaDiaryApi }) =>
+        personaDiaryApi.getUnreadCount().then((count) => {
+          if (alive) setUnreadDiaries(count)
+        }).catch(() => {}),
+      )
+    }
+    fetchUnread()
+    const timer = window.setInterval(fetchUnread, 60000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [location.pathname])
+
   // 音乐页沉浸式深色主题：进入 /music 整体变深色霓虹，离开自动恢复
   const immersive = location.pathname === '/music'
 
@@ -197,17 +220,17 @@ export default function MainLayout() {
       'children' in group
         ? {
             ...group,
-            children: group.children.map((it) =>
-              it.key === '/agent-tasks' && unreadTasks > 0 && !mini
-                ? {
-                    ...it,
-                    label: (
-                      <Badge count={unreadTasks} size="small" offset={[10, 0]}>
-                        <span>{it.label}</span>
-                      </Badge>
-                    ),
-                  }
-                : it,
+            children: group.children.map((it) => {
+              const diaryBadge = it.key === '/diaries' && unreadDiaries > 0 && !mini
+              const taskBadge = it.key === '/agent-tasks' && unreadTasks > 0 && !mini
+              if (diaryBadge) {
+                return { ...it, label: <Badge count={unreadDiaries} size="small" offset={[10, 0]}><span>{it.label}</span></Badge> }
+              }
+              if (taskBadge) {
+                return { ...it, label: <Badge count={unreadTasks} size="small" offset={[10, 0]}><span>{it.label}</span></Badge> }
+              }
+              return it
+            },
             ),
           }
         : group,
@@ -235,9 +258,8 @@ export default function MainLayout() {
           collapsed={collapsed}
           trigger={null}
           collapsedWidth={72}
+          className="main-sider"
           style={{
-            display: 'flex',
-            flexDirection: 'column',
             borderInlineEnd: immersive
               ? '1px solid rgba(255,255,255,0.08)'
               : '1px solid #f0f0f0',

@@ -161,6 +161,9 @@ class AgentPersonaService:
             "human_mode": persona.human_mode,
             "show_avatar": persona.show_avatar,
             "allow_agent_call": persona.allow_agent_call,
+            "cloned_from_id": str(persona.cloned_from_id) if persona.cloned_from_id else None,
+            "clone_count": persona.clone_count or 0,
+            "is_listed": persona.is_listed or False,
         }
 
 

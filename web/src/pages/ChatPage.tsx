@@ -44,7 +44,7 @@ import type { ChatAvatars, UiMessage } from './chat/types'
 import { groupConversationsByDate } from './chat/groupByDate'
 import { useMusicStore } from '@/stores/musicStore'
 import { useChatHeaderStore } from '@/stores/chatHeaderStore'
-import { personaApi } from '@/api/personas'
+import { personaApi, type Persona } from '@/api/personas'
 import { authApi } from '@/api/auth'
 import { useSkillStore } from '@/stores/skillStore'
 
@@ -232,20 +232,26 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations])
 
-  // 加载对话头像上下文：当前角色头像 + 用户头像 + 显示开关
+  // 加载对话头像上下文：所有角色头像映射 + 当前角色 + 用户头像
   const loadAvatars = async () => {
     try {
       const [pResp, meResp] = await Promise.all([
-        personaApi.list(),
+        personaApi.list(true),  // all=true 加载全部角色
         authApi.me(),
       ])
-      const active = pResp.data.find((p) => p.is_active)
+      const personas: Persona[] = Array.isArray(pResp?.data) ? pResp.data : (pResp?.data as any)?.data ?? []
+      const active = personas.find((p) => p.is_active)
+      const personaMap: Record<string, { name: string; avatarUrl: string | null }> = {}
+      for (const p of personas) {
+        personaMap[p.id] = { name: p.name, avatarUrl: p.avatar_url ?? null }
+      }
       setAvatars({
         show: active?.show_avatar ?? false,
         personaName: active?.name,
         personaAvatarUrl: active?.avatar_url ?? null,
         userAvatarUrl: meResp.data.avatar ?? null,
         humanMode: active?.human_mode ?? false,
+        personaMap,
       })
     } catch {
       // 头像信息拉取失败不影响对话
@@ -319,6 +325,7 @@ export default function ChatPage() {
           feedback: m.feedback ?? null,
           createdAt: m.created_at,
           fromHistory: true,
+          senderPersonaId: m.sender_persona_id ?? null,
         })),
       )
       if (focusMessageId) {

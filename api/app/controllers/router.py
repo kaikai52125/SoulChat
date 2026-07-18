@@ -25,7 +25,10 @@ from app.controllers import (
     model_config_controller,
     music_controller,
     notify_controller,
+    persona_diary_controller,
+    persona_growth_controller,
     persona_group_controller,
+    persona_market_controller,
     research_controller,
     search_controller,
     skill_controller,
@@ -47,7 +50,11 @@ api_router.include_router(memory_controller.router)
 api_router.include_router(chat_controller.router)
 api_router.include_router(group_chat_controller.router)
 api_router.include_router(agent_persona_controller.router)
+api_router.include_router(persona_growth_controller.router)
 api_router.include_router(persona_group_controller.router)
+api_router.include_router(persona_diary_controller.router)
+api_router.include_router(persona_market_controller.router)
+api_router.include_router(persona_market_controller.marketplace_router)
 api_router.include_router(skill_controller.persona_skill_router)
 api_router.include_router(skill_controller.marketplace_router)
 api_router.include_router(mcp_controller.router)

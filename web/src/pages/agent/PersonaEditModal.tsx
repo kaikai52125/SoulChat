@@ -20,6 +20,7 @@ import {
   EditOutlined,
   ImportOutlined,
   PlusOutlined,
+  ShoppingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
 import { chatApi } from '@/api/chat'
@@ -31,6 +32,8 @@ import { AuthenticatedImage } from '@/components/AuthenticatedImage'
 import { personaGradientCss, personaInitial } from './personaGradient'
 import SkillEditModal from '../skill/SkillEditModal'
 import MarketModal from './SkillMarketModal'
+import GrowthPanel from '@/components/persona/GrowthPanel'
+import PublishPersonaModal from '@/components/market/PublishPersonaModal'
 
 interface Props {
   open: boolean
@@ -573,7 +576,15 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
         </div>
       ),
     },
+    // 成长 Tab — 仅编辑已有角色时显示
+    ...(persona ? [{
+      key: 'growth',
+      label: '成长',
+      children: <GrowthPanel personaId={persona.id} />,
+    }] : []),
   ]
+
+  const [publishOpen, setPublishOpen] = useState(false)
 
   return (
     <Modal
@@ -587,8 +598,38 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
       width={720}
       className="persona-modal"
       styles={{ body: { paddingTop: 0 } }}
+      footer={(_, { OkBtn, CancelBtn }) => (
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <div>
+            {persona && (
+              <Button
+                type="dashed"
+                icon={<ShoppingOutlined />}
+                onClick={() => setPublishOpen(true)}
+              >
+                {persona.is_listed ? '更新市场信息' : '发布到市场'}
+              </Button>
+            )}
+          </div>
+          <Space>
+            <CancelBtn />
+            <OkBtn />
+          </Space>
+        </div>
+      )}
     >
       <Tabs items={tabItems} style={{ marginTop: 8 }} />
+      {persona && (
+        <PublishPersonaModal
+          persona={persona}
+          open={publishOpen}
+          onClose={() => setPublishOpen(false)}
+          onPublished={() => {
+            setPublishOpen(false)
+            onSaved?.()
+          }}
+        />
+      )}
     </Modal>
   )
 }

@@ -40,6 +40,11 @@ export default function PersonaCard({
           <ThunderboltFilled /> 当前
         </div>
       )}
+      {persona.growth && (
+        <div className="persona-lv-badge">
+          Lv.{persona.growth.level}
+        </div>
+      )}
 
       {/* 封面：头像 + 光晕底 */}
       <div className="persona-cover" style={{ background: grad }}>

@@ -10,6 +10,19 @@ body,
   height: 100%;
 }
 
+/* 侧边栏：固定视口高度，内部菜单溢出时滚动 */
+.main-sider {
+  height: 100vh !important;
+  position: sticky !important;
+  top: 0;
+}
+.main-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
 /* 自适应策略（企业级流式布局）：
    不使用整体 zoom 缩放（zoom 是固定倍数，无法适应不同尺寸屏幕，且污染 vh/fixed/滚动条）。
    改为：字号/间距用固定 px（所有屏幕一致、符合用户预期）+ 布局靠 flex / max-width 居中流动。
@@ -2508,6 +2521,21 @@ body {
   color: #5b3b00;
   background: linear-gradient(135deg, #ffe08a, #ffc24b);
   box-shadow: 0 4px 12px rgba(255, 180, 50, 0.5);
+}
+.persona-lv-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
 /* 封面：光晕 + 头像 */

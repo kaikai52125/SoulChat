@@ -17,15 +17,18 @@ export interface UiMessage {
   createdAt?: string // 消息时间（ISO 字符串）
   fromHistory?: boolean // 来自历史加载（非本次实时生成）→ 真人模式多气泡不重放动画，直接全显
   traceId?: string // 这条 AI 消息所属对话回合的执行轨迹 id(供「执行轨迹」按钮跳转)
+  senderPersonaId?: string | null // 发言角色 ID（消息归属哪个角色）
 }
 
-// 对话头像上下文：是否显示 + AI（当前角色）头像 + 用户头像
+// 对话头像上下文：是否显示 + 所有角色头像 + 用户头像 + 当前活跃角色
 export interface ChatAvatars {
   show: boolean
   personaName?: string
-  personaAvatarUrl?: string | null // AI 头像（当前角色）；空则 AI 侧不显示
-  userAvatarUrl?: string | null // 用户头像；空则用户侧不显示
-  humanMode?: boolean // 全局真人模式：AI 回复走「正在输入…→逐条气泡」，不显示助手过程条
+  personaAvatarUrl?: string | null // 当前活跃角色头像（新消息/兜底用）
+  userAvatarUrl?: string | null
+  humanMode?: boolean
+  // 所有角色的头像映射：persona_id → { name, avatarUrl }
+  personaMap?: Record<string, { name: string; avatarUrl: string | null }>
 }
 
 // 格式化消息时间：今天显示 HH:mm，否则显示 月-日 HH:mm

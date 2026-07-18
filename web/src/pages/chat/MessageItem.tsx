@@ -87,9 +87,16 @@ export default function MessageItem({
   }
 
   // 头像渲染：开关开 + 对应侧有头像才显示
+  // AI 消息优先用消息本身的 sender_persona_id 查对应角色头像
   const showAvatars = !!avatars?.show
-  const aiAvatarUrl = avatars?.personaAvatarUrl || null
   const userAvatarUrl = avatars?.userAvatarUrl || null
+  const aiAvatarUrl = (() => {
+    if (!isUser && msg.senderPersonaId && avatars?.personaMap) {
+      const info = avatars.personaMap[msg.senderPersonaId]
+      if (info?.avatarUrl) return info.avatarUrl
+    }
+    return avatars?.personaAvatarUrl || null
+  })()
   const sideAvatarUrl = isUser ? userAvatarUrl : aiAvatarUrl
   // 该侧有头像才渲染头像列；无头像则气泡占满（不占位、不强制圆形）
   const renderAvatar = () => {

@@ -23,7 +23,16 @@ async def list_personas(
     """角色列表。默认只返回「单个角色」；all=true 返回全部（含仅卡组成员，群聊页解析头像用）。"""
     service = AgentPersonaService(session)
     items = await service.list(user.id, include_group_only=all)
-    return success([service.to_out_dict(p) for p in items])
+    out = [service.to_out_dict(p) for p in items]
+
+    # 批量注入成长摘要(仅在查看自己的角色列表时)
+    if not all and out:
+        from app.repositories.persona_growth_repository import batch_get_levels
+        levels = await batch_get_levels(session, [p.id for p in items], user.id)
+        for d in out:
+            d["growth"] = levels.get(d["id"], {"level": 1, "xp": 0, "intimacy": 0})
+
+    return success(out)
 
 
 @router.post("")
