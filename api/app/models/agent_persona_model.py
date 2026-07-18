@@ -7,7 +7,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -66,6 +66,12 @@ class AgentPersona(Base):
     # ── 交互风格 ──
     human_mode: Mapped[bool] = mapped_column(Boolean, default=False)
     show_avatar: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # ── Agent-as-Tool ──
+    # 允许其他角色（Agent）将本角色作为工具调用
+    allow_agent_call: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
 
     # ── 状态 ──
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

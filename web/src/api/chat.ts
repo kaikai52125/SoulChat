@@ -248,10 +248,10 @@ export const groupApi = {
   listHumans(convId: string) {
     return client.get<unknown, Wrapped<GroupHuman[]>>(`/groups/${convId}/humans`)
   },
-  say(convId: string, message: string, imageKeys?: string[]) {
+  say(convId: string, message: string, imageKeys?: string[], mode?: string) {
     return client.post<unknown, Wrapped<{ message_id: string }>>(
       `/groups/${convId}/say`,
-      { message, image_keys: imageKeys ?? [] },
+      { message, image_keys: imageKeys ?? [], mode: mode ?? 'social' },
     )
   },
 }
@@ -303,6 +303,10 @@ export interface GroupRealtimeHandlers {
     latency_ms?: number
   }) => void
   onSpeakerEnd?: (d: { persona_id: string; message_id: string }) => void
+  onTaskPlan?: (d: { goal: string; subtasks: Array<{ id: string; description: string; assigned_persona: string; dependencies: string[]; expected_output: string }> }) => void
+  onSubtaskStart?: (d: { subtask_id: string; persona: string }) => void
+  onSubtaskDone?: (d: { subtask_id: string; persona: string; status: string; elapsed_ms?: number }) => void
+  onTaskOutput?: (d: { message_id: string; persona_name: string; content: string; created_at?: string }) => void
   onDone?: (d: { conversation_id: string }) => void
   onError?: (message: string) => void
 }
@@ -374,6 +378,18 @@ export async function subscribeGroupEvents(
           break
         case 'speaker_end':
           handlers.onSpeakerEnd?.(payload as never)
+          break
+        case 'task_plan':
+          handlers.onTaskPlan?.(payload as never)
+          break
+        case 'subtask_start':
+          handlers.onSubtaskStart?.(payload as never)
+          break
+        case 'subtask_done':
+          handlers.onSubtaskDone?.(payload as never)
+          break
+        case 'task_output':
+          handlers.onTaskOutput?.(payload as never)
           break
         case 'done':
           handlers.onDone?.(payload as never)

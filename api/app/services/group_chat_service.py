@@ -25,6 +25,7 @@ from app.core.agent.group_chat import (
     build_transcript,
     decide_speakers,
     parse_mention,
+    run_group_chat,
     stream_speaker,
 )
 from app.core.exceptions import BizError
@@ -566,6 +567,8 @@ class GroupChatService:
         )
         text = body.message.strip()
         image_keys = list(body.image_keys or [])
+        mode = getattr(body, 'mode', 'social')
+        print(f"\n[MSG] say() 收到: text={text[:50]!r} mode={mode!r}", flush=True)
 
         user_meta: dict = {"sender_name": nickname, "sender_user_id": str(user_id)}
         if image_keys:
@@ -598,8 +601,9 @@ class GroupChatService:
         # 后台触发 AI 接话（独立 session，不阻塞本次 HTTP）
         import asyncio
 
+        mode = body.mode if hasattr(body, 'mode') else 'social'
         task = asyncio.create_task(
-            self._run_ai_turn_bg(conv_id, conv.user_id, text, image_keys)
+            self._run_ai_turn_bg(conv_id, conv.user_id, text, image_keys, mode)
         )
         _BG_TASKS.add(task)
         task.add_done_callback(_BG_TASKS.discard)
@@ -611,6 +615,7 @@ class GroupChatService:
         owner_id: uuid.UUID,
         user_text: str,
         image_keys: list[str],
+        mode: str = "social",
     ) -> None:
         """后台任务：用独立 session 跑 AI 角色接话，逐 token 广播到频道。
 
@@ -623,7 +628,7 @@ class GroupChatService:
         try:
             async with SessionLocal() as session:
                 service = GroupChatService(session)
-                await service._ai_turn(conv_id, owner_id, user_text, image_keys)
+                await service._ai_turn(conv_id, owner_id, user_text, image_keys, mode)
         except Exception as e:
             logger.error("群聊后台 AI 回合失败: conv=%s err=%s", conv_id, e, exc_info=True)
             await bus.publish(str(conv_id), "error", {"message": f"AI 接话出错：{e}"})
@@ -637,14 +642,78 @@ class GroupChatService:
                     logger.warning("关闭群聊 MCP 会话出错（忽略）: %s", e)
             await bus.release_turn_lock(str(conv_id))
 
+    async def _ai_turn_task(
+        self,
+        cid: str,
+        conv,
+        owner_id: uuid.UUID,
+        user_text: str,
+        members: list[dict],
+    ) -> None:
+        """任务协作模式：Orchestrator 分解 → 并行执行 → 汇总 → 广播结果。"""
+        print(f"\n{'[TASK-MODE]' * 30}", flush=True)
+        print(f"[TASK-MODE] _ai_turn_task 被调用了！消息: {user_text[:80]}", flush=True)
+        print(f"[TASK-MODE] 成员: {[m['name'] for m in members]}", flush=True)
+        print(f"{'[TASK-MODE]' * 30}\n", flush=True)
+
+        model, _ = await build_default_chat_model(
+            self.session, owner_id, temperature=0.7, streaming=False
+        )
+        history = await self._history_for_transcript(conv.id)
+
+        # 构建任务模式工具集（datetime + web_search + knowledge_search + memory_search）
+        from app.core.agent.tools import build_enabled_tools
+        task_tools = await build_enabled_tools(
+            self.session, owner_id,
+            citations=[],
+            layered=True,
+        )
+        print(f"[TASK-MODE] 工具集: {[t.name for t in task_tools]}", flush=True)
+
+        try:
+            async for event in run_group_chat(
+                user_message=user_text,
+                members=members,
+                history=history,
+                model=model,
+                mode="task",
+                tools=task_tools,
+            ):
+                if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start"):
+                    await bus.publish(cid, event["type"], event)
+                elif event["type"] == "token":
+                    await bus.publish(cid, "token", {"text": event["text"]})
+                elif event["type"] == "final":
+                    # 落库，然后作为完整消息直接广播（不走流式通道避免竞态）
+                    msg = await self.msg_repo.add(
+                        Message(
+                            conversation_id=conv.id,
+                            role=ROLE_ASSISTANT,
+                            content=event["text"],
+                            meta_data={"sender_name": "Orchestrator", "mode": "task"},
+                        )
+                    )
+                    await bus.publish(cid, "task_output", {
+                        "message_id": str(msg.id),
+                        "persona_name": "Orchestrator",
+                        "content": event["text"],
+                        "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                    })
+        except Exception as e:
+            logger.error("任务协作模式异常: %s", e, exc_info=True)
+            await bus.publish(cid, "error", {"message": f"任务协作失败：{e}"})
+        finally:
+            await bus.publish(cid, "done", {"conversation_id": cid})
+
     async def _ai_turn(
         self,
         conv_id: uuid.UUID,
         owner_id: uuid.UUID,
         user_text: str,
         image_keys: list[str],
+        mode: str = "social",
     ) -> None:
-        """AI 角色接话一回合：调度发言顺序 → 逐角色流式 → 广播事件并落库。"""
+        """AI 角色接话一回合：social → 调度发言顺序；task → 编排器协作。"""
         conv = await self._get_conv_any(conv_id)
         if conv is None or not conv.is_group:
             return
@@ -655,6 +724,12 @@ class GroupChatService:
         name_to_member = {m["name"]: m for m in members}
         cid = str(conv_id)
         human_mode = await self._human_mode(owner_id)
+
+        # ── 任务协作模式 ──
+        print(f"\n🔑 _ai_turn mode={mode!r} user_text={user_text[:50]!r}", flush=True)
+        if mode == "task":
+            await self._ai_turn_task(cid, conv, owner_id, user_text, members)
+            return
 
         history = await self._history_for_transcript(conv_id)
         transcript = build_transcript(history)
@@ -862,6 +937,53 @@ class GroupChatService:
 
             # 构 transcript（含刚落库的用户消息）
             history = await self._history_for_transcript(conv.id)
+
+            # ── 任务协作模式 ──
+            if body.mode == "task":
+                model, _ = await build_default_chat_model(
+                    self.session, user_id, temperature=0.7, streaming=False
+                )
+                try:
+                    async for event in run_group_chat(
+                        user_message=user_text,
+                        members=members,
+                        history=history,
+                        model=model,
+                        mode="task",
+                    ):
+                        if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start"):
+                            # 将协作内部事件包装为 meta 事件
+                            yield _sse(event["type"], event)
+                        elif event["type"] == "token":
+                            yield _sse("token", {"text": event["text"]})
+                        elif event["type"] == "final":
+                            # 落库最终产出
+                            msg = await self.msg_repo.add(
+                                Message(
+                                    conversation_id=conv.id,
+                                    role=ROLE_ASSISTANT,
+                                    content=event["text"],
+                                    meta_data={
+                                        "sender_name": "Orchestrator",
+                                        "mode": "task",
+                                    },
+                                )
+                            )
+                            yield _sse(
+                                "speaker_end",
+                                {"persona_id": "orchestrator", "message_id": str(msg.id)},
+                            )
+                            yield _sse(
+                                "token", {"text": event["text"]},
+                            )
+                except Exception as e:
+                    logger.error("任务协作模式异常: %s", e, exc_info=True)
+                    yield _sse("error", {"message": f"任务协作失败：{e}"})
+                finally:
+                    await self.conv_repo.touch(conv.id)
+                    yield _sse("done", {"conversation_id": str(conv.id)})
+                return
+
             transcript = build_transcript(history)
 
             # 决定发言顺序：@ 指定优先（跳过主持人），否则主持人调度
@@ -883,7 +1005,7 @@ class GroupChatService:
             yield _sse("error", {"message": f"群聊出错：{e}"})
             return
 
-        # 依次让每个角色发言，transcript 一轮内动态累加（接话）
+        # 依次让每个角色发言，transcript 一轮内动态累加（接话）（社交模式）
         try:
             speaker_model, self._speaker_config = await build_default_chat_model(
                 self.session, user_id, temperature=0.8, streaming=True

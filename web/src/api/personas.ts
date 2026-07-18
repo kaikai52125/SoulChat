@@ -30,6 +30,7 @@ export interface Persona {
   context_window: number
   human_mode: boolean
   show_avatar: boolean
+  allow_agent_call: boolean
 }
 
 export interface PersonaPayload {
@@ -51,6 +52,7 @@ export interface PersonaPayload {
   context_window?: number
   human_mode?: boolean
   show_avatar?: boolean
+  allow_agent_call?: boolean
 }
 
 export const personaApi = {

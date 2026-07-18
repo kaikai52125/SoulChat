@@ -1,19 +1,27 @@
-"""群聊编排：多角色卡按「主持人」调度依次发言（接话式上下文）。
+"""群聊编排：双模式——社交（多角色按主持人调度依次发言）+ 任务协作（Orchestrator-Worker 并行）。
 
-设计要点：
+社交模式（_run_social_mode / 当前默认）：
 - 上下文用「文本 transcript」承载多方对话——每条消息带发言人前缀（【用户】/【角色名】），
   因为对某个角色而言，别人说的话既非自己（不能当 AIMessage）也非用户（不能当 HumanMessage），
   统一作为场景信息整段呈现最稳定。
 - 每轮先调一次主持人 LLM 决定发言顺序（@ 指定时跳过主持人）。
 - 角色依次发言，transcript 在一轮内动态累加，使后发言的角色能看到先发言角色刚说的话（接话）。
 - 群聊不接工具、不做记忆萃取，纯人设对话。
+
+任务协作模式（_run_task_mode / 新增）：
+- Orchestrator 将用户任务分解为子任务 DAG。
+- 按拓扑分层并行执行，每个角色用自己的 system_prompt 独立推理。
+- SharedBlackboard 替代纯文本 transcript 成为角色间通信的核心数据结构。
+- 最终产出经 Verifier 审查（可选）。
 """
 from collections.abc import AsyncGenerator
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from app.core.agent.blackboard import SharedBlackboard
 from app.core.agent.prompt_renderer import render_agent_prompt
+from app.core.agent.task_orchestrator import TaskOrchestrator
 from app.core.logging import get_logger
 from app.core.memory.json_utils import parse_json_object
 
@@ -169,10 +177,154 @@ def parse_mention(user_text: str, member_names: list[str]) -> str | None:
     return None
 
 
+# ── 任务协作模式 ──────────────────────────────────────────────
+
+
+async def _run_task_mode(
+    user_message: str,
+    members: list[dict],
+    history: list[dict],
+    model: ChatOpenAI,
+    tools: list | None = None,
+) -> AsyncGenerator[dict, None]:
+    """任务协作模式：Orchestrator 分解 → 并行执行 → 汇总 → (Verifier)。
+
+    产出事件流（与 run_group_chat 的格式一致）：
+    - {"type": "task_plan", "goal": str, "subtasks": list}
+    - {"type": "subtask_start", "subtask_id": str, "persona": str}
+    - {"type": "subtask_done", "subtask_id": str, "persona": str}
+    - {"type": "synthesize_start"}
+    - {"type": "token", "text": str}
+    - {"type": "final", "text": str}
+
+    Args:
+        user_message: 用户发送的任务描述
+        members: 群组成员列表 [{id, name, system_prompt, ...}]
+        history: 群聊历史消息
+        model: 语言模型
+    """
+    blackboard = SharedBlackboard()
+    orchestrator = TaskOrchestrator(model, tools=tools)
+
+    print(f"\n{'>>' * 35}", flush=True)
+    print(f"[TASK-MODE] 进入任务协作模式 _run_task_mode", flush=True)
+    print(f"   用户消息: {user_message[:100]}", flush=True)
+    print(f"   成员: {[m['name'] for m in members]}", flush=True)
+    print(f"{'>>' * 35}\n", flush=True)
+
+    # 成员能力摘要
+    member_capabilities = [
+        {"name": m["name"], "brief": _persona_brief(m.get("system_prompt", ""))}
+        for m in members
+    ]
+
+    # Step 1: 分解
+    try:
+        plan = await orchestrator.decompose(user_message, member_capabilities)
+        yield {
+            "type": "task_plan",
+            "goal": plan.goal,
+            "subtasks": [st.model_dump() for st in plan.subtasks],
+        }
+    except ValueError as e:
+        # 降级：第一个成员直接回答
+        logger.warning("任务分解失败，降级为单角色回答: %s", e)
+        yield {"type": "task_plan", "goal": user_message, "subtasks": []}
+        try:
+            transcript = _build_transcript_from_history(history)
+            sys_prompt = members[0].get("system_prompt", "你是一个助手。")
+            messages = [
+                SystemMessage(content=sys_prompt),
+                HumanMessage(
+                    content=(
+                        f"用户的需求：{user_message}\n\n"
+                        f"对话历史：{transcript}\n\n"
+                        f"请直接回答用户的问题。"
+                    )
+                ),
+            ]
+            resp = await model.ainvoke(messages)
+            text = resp.content if isinstance(resp.content, str) else str(resp.content)
+            yield {"type": "token", "text": text}
+            yield {"type": "final", "text": text.strip()}
+        except Exception as e2:
+            yield {"type": "final", "text": f"（任务协作执行失败：{e2}）"}
+        return
+
+    # Step 2: 执行（yield 所有 subtask_start 后，每个 subtask 完成即刻 yield done）
+    for st in plan.subtasks:
+        yield {"type": "subtask_start", "subtask_id": st.id, "persona": st.assigned_persona}
+    async for done_event in orchestrator.execute_stream(plan, blackboard, members):
+        yield done_event
+
+    # Step 3: 汇总
+    yield {"type": "synthesize_start", "flush": True}
+    print(f"\n[SYNTH] 开始汇总 synthesize...", flush=True)
+    try:
+        output = await orchestrator.synthesize(blackboard, task_goal=plan.goal)
+    except Exception as e:
+        logger.warning("汇总产出失败: %s", e)
+        output = f"（任务协作完成，但汇总失败：{e}）"
+        print(f"❌ synthesize 异常: {e}", flush=True)
+
+    print(f"📤 产出 final 事件, 文本长度={len(output)}", flush=True)
+    yield {"type": "final", "text": output or "（空结果）"}
+
+
+def _build_transcript_from_history(history: list[dict]) -> str:
+    """从历史消息列表构建纯文本 transcript（用于任务模式的降级路径）。"""
+    rows = history[-MAX_TRANSCRIPT_MESSAGES:] if history else []
+    lines: list[str] = []
+    for m in rows:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        speaker = m.get("sender_name") or ("用户" if m.get("role") == "user" else "助手")
+        lines.append(f"【{speaker}】{content}")
+    return "\n".join(lines)
+
+
+# ── 双模式入口 ─────────────────────────────────────────────────
+
+
+async def run_group_chat(
+    user_message: str,
+    members: list[dict],
+    history: list[dict],
+    model: ChatOpenAI,
+    mode: str = "social",
+    tools: list | None = None,
+) -> AsyncGenerator[dict, None]:
+    """群聊双模式入口。
+
+    根据 mode 参数路由到社交模式或任务协作模式。
+
+    Args:
+        user_message: 用户发送的消息
+        members: 群组成员列表 [{id, name, system_prompt, ...}]
+        history: 群聊历史消息
+        model: 语言模型
+        mode: "social"（社交对话）或 "task"（任务协作），默认 "social"
+
+    社交模式下，调用方需自行处理 speaker 调度与消息落库；
+    任务协作模式下，产出编排好的协作结果。
+    """
+    if mode == "task":
+        async for event in _run_task_mode(user_message, members, history, model, tools=tools):
+            yield event
+    else:
+        # 社交模式：保持完全兼容
+        # 调用方（stream_group_chat）直接使用现有的 inline 逻辑
+        # 这里作为一个占位路由，实际的社交逻辑仍在 group_chat_service 中
+        return
+
+
 __all__ = [
     "MAX_TRANSCRIPT_MESSAGES",
     "build_transcript",
     "decide_speakers",
     "stream_speaker",
     "parse_mention",
+    "run_group_chat",
+    "_run_task_mode",
 ]

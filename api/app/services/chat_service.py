@@ -14,7 +14,20 @@ from collections.abc import AsyncGenerator
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.agent.orchestrator import run_function_calling, run_react
+from app.config import settings
+from app.core.agent.orchestrator import run_function_calling, run_react, run_two_speed
+from app.core.agent.reflector import (
+    ChatReflector,
+    _MAX_RAW_REFLECTIONS,
+    _compact_reflections,
+    _DISTILL_SUMMARY_HEADER,
+    _extract_non_reflection_content,
+    _extract_recent_reflections,
+    _format_reflection_block,
+    _is_trivial_message,
+    _should_skip_reflection,
+    _summarize_user_msg,
+)
 from app.core.agent.tools import build_enabled_tools
 from app.core.agent.tracing import get_tracer
 from app.core.realtime import bus
@@ -265,9 +278,10 @@ class ChatService:
 
     @staticmethod
     def _compose_system_prompt(persona, skills: list) -> str:
-        """组装 system prompt 基础部分：角色人设 + 角色 MEMORY.md + 技能任务提示词 + few-shot。
+        """组装 system prompt 基础部分：角色人设 + 角色 MEMORY.md + 近期反思 + 技能任务提示词 + few-shot。
 
-        角色人设定「我是谁」，技能叠加「我现在干什么专项任务」，MEMORY.md 存角色记得的事。
+        角色人设定「我是谁」，技能叠加「我现在干什么专项任务」，MEMORY.md 存角色记得的事，
+        近期反思与经验注入最近 10 条自我反思结果供参考。
         不再依赖全局 AgentConfig——一切配置都从 persona 对象读取。
         """
         parts: list[str] = []
@@ -277,11 +291,33 @@ class ChatService:
         if persona_prompt:
             parts.append(persona_prompt)
 
-        # ② 角色 MEMORY.md
+        # ② 角色 MEMORY.md（去掉反思块和蒸馏摘要，只保留原始记忆内容）
         if persona and persona.memory_text:
             memory = persona.memory_text.strip()
             if memory:
-                parts.append(f"【角色记忆】\n{memory}")
+                # 去掉反思块和蒸馏摘要
+                non_reflection = _extract_non_reflection_content(memory).strip()
+                # 提取蒸馏摘要（如果有）
+                distilled = ""
+                ref_start = memory.find(_DISTILL_SUMMARY_HEADER)
+                if ref_start >= 0:
+                    ref_end = memory.find("\n--- reflection ", ref_start)
+                    if ref_end < 0:
+                        ref_end = len(memory)
+                    distilled = memory[ref_start + len(_DISTILL_SUMMARY_HEADER):ref_end].strip()
+
+                if non_reflection:
+                    parts.append(f"【角色记忆】\n{non_reflection}")
+                if distilled:
+                    parts.append(f"【经验总结】\n{distilled}")
+
+        # ②' 近期反思（提取最近 5 条原始反思的经验教训）
+        if persona and persona.memory_text:
+            reflections = _extract_recent_reflections(persona.memory_text, max_count=5)
+            if reflections:
+                parts.append(
+                    "【近期反思】\n" + "\n".join(f"- {r}" for r in reflections)
+                )
 
         # ③ 技能任务提示词（自动挂载 + 临时覆盖）
         for s in skills:
@@ -592,6 +628,24 @@ class ChatService:
                     "done",
                     {"conversation_id": cid, "message_id": str(assistant_msg.id)},
                 )
+                # ── 后轮自反思（fire-and-forget，不阻塞 answer 流式返回）──
+                if not settings.chat_reflection_enabled:
+                    print("[REFLECTION] 跳过: chat_reflection_enabled=False", flush=True)
+                elif persona_id is None:
+                    print("[REFLECTION] 跳过: persona_id=None (无活跃角色)", flush=True)
+                elif _is_trivial_message(user_text):
+                    print(f"[REFLECTION] 跳过: 用户消息为寒暄 '{user_text[:30]}'", flush=True)
+                elif _should_skip_reflection(full_text, tool_calls):
+                    print(f"[REFLECTION] 跳过: 回答{len(full_text)}字 且 未使用工具", flush=True)
+                else:
+                    print(f"[REFLECTION] 触发反思: persona={persona_id} tools={len(tool_calls)} answer_len={len(full_text)}", flush=True)
+                    _spawn_bg(self._reflect_and_persist(
+                        user_id=user_id,
+                        persona_id=persona_id,
+                        user_msg=user_text,
+                        assistant_answer=full_text,
+                        tool_calls_log=tool_calls,
+                    ))
         except Exception as e:
             logger.error("问答后台生成失败: conv=%s err=%s", cid, e, exc_info=True)
             # 已生成部分内容也落库，避免完全丢失
@@ -707,10 +761,29 @@ class ChatService:
         if body.kb_ids is not None:
             kb_ids = list(body.kb_ids)
 
+        # ── Agent-as-Tool：加载可被其他角色调用的角色列表 ──
+        agent_callable_personas = []
+        if persona:
+            agent_callable_personas = await self.persona_repo.list_callable(
+                user_id, exclude_id=persona.id
+            )
+
+        # ── 动态工具发现（v0.6）：核心工具直接注入，扩展工具按需发现 ──
+        # 检查是否存在扩展工具（MCP Server 或 Skill 脚本）
+        has_extended_tools = bool(
+            (persona and persona.enable_mcp)
+            or agent_callable_personas
+            or any(
+                s.storage_path and s.config.get("tools")
+                for s in active_skills
+            )
+        )
+
+        # 分层模式：layered=True 只加载 core 层内置工具，MCP 等扩展工具通过 tool_search 发现
         tools = await build_enabled_tools(
             self.session, user_id, citations, overrides, stats_holder, kb_ids,
-            enable_mcp=persona.enable_mcp if persona else False,
-            mcp_server_ids=[str(s) for s in persona.mcp_server_ids] if persona and persona.mcp_server_ids else None,
+            layered=True,
+            agent_callable_personas=agent_callable_personas,
         )
 
         # 技能工具白名单叠加（取并集限制——所有技能的白名单取交集？不，应该是任一技能允许的工具就允许）
@@ -731,7 +804,7 @@ class ChatService:
         if skill_tool_keys and tools:
             tools = [t for t in tools if t.name in skill_tool_keys]
 
-        # 附加技能脚本工具
+        # 附加技能脚本工具（仍注入，同时计算 embedding 供 tool_search 发现）
         for s in active_skills:
             if s.storage_path and s.config.get("tools"):
                 try:
@@ -761,13 +834,65 @@ class ChatService:
                         skill_config=s.config,
                         skill_dir=s.storage_path,
                         record_call=_bump,
+                        session=self.session,
+                        user_id=user_id,
                     )
                     tools.extend(st)
                 except Exception as e:
                     logger.warning("构建技能工具失败: skill=%s err=%s", s.id, e)
 
+        # ── Agent-as-Tool：直接将可调用角色挂进工具列表（不走 tool_search 间接发现）──
+        agent_tool_names: list[str] = []
+        if agent_callable_personas:
+            from app.core.agent.tools.builtin.agent_tool import build_agent_tool as _build_at
+            from app.core.agent.tools.base import ToolBuildContext
+
+            at_ctx = ToolBuildContext(
+                session=self.session, user_id=user_id, citations=citations,
+                embed_holder={}, stats_holder=stats_holder, kb_ids=kb_ids,
+            )
+            for persona in agent_callable_personas:
+                try:
+                    at = await _build_at(persona, at_ctx)
+                    if at is not None:
+                        tools.append(at)
+                        agent_tool_names.append(at.name)
+                except Exception as e:
+                    logger.warning("构建 Agent 工具失败: persona=%s err=%s", getattr(persona, "name", "?"), e)
+
         system_prompt = await _assemble_prompt(has_tools=bool(tools))
-        if not tools:
+        # 当存在扩展工具时，追加使用提示
+        if has_extended_tools or agent_tool_names:
+            hints: list[str] = []
+            if agent_tool_names:
+                names = [p.name for p in agent_callable_personas]
+                hints.append(
+                    f"你可以直接调用以下角色作为工具来协助完成任务：{', '.join(names)}。"
+                    f"当用户让你「让XX角色去做某事」或者你需要专业意见时，"
+                    f"直接调用对应的 agent__ 工具（已挂载在你的工具列表中）。"
+                )
+            if has_extended_tools:
+                hints.append(
+                    "如需使用 MCP 工具或技能工具，请先使用 tool_search 查找，"
+                    "然后根据结果调用相应工具完成任务。"
+                )
+            if hints:
+                system_prompt = (system_prompt + "\n\n" + "\n".join(hints)).strip()
+        if settings.two_speed_enabled and supports_function_call(config):
+            # Two-Speed Router 路径：按消息复杂度自动分流
+            lc_messages = []
+            if system_prompt:
+                lc_messages.append(SystemMessage(content=system_prompt))
+            lc_messages.extend(history)
+            lc_messages.append(HumanMessage(content=composed_text))
+            async for ev in run_two_speed(
+                model, tools, lc_messages,
+                persona=persona,
+                router_model=settings.router_model,
+                stats_holder=stats_holder,
+            ):
+                yield ev
+        elif not tools:
             lc_messages: list = []
             if system_prompt:
                 lc_messages.append(SystemMessage(content=system_prompt))
@@ -929,6 +1054,102 @@ class ChatService:
             )
         except Exception as e:
             logger.warning("情绪分析派发失败（忽略）: user=%s err=%s", user_id, e)
+
+    # ── 后轮自反思 ──
+
+    async def _reflect_and_persist(
+        self,
+        user_id: uuid.UUID,
+        persona_id: uuid.UUID,
+        user_msg: str,
+        assistant_answer: str,
+        tool_calls_log: list[dict],
+    ) -> None:
+        """回答完成后异步反思：调 ChatReflector → 格式化 → 追加到 persona.memory_text。
+
+        全程 try/except，不抛异常到调用方（fire-and-forget 静默降级）。
+        使用独立 DB session，不占用请求 session。
+        """
+        if not persona_id:
+            return
+        try:
+            async with SessionLocal() as session:
+                persona_repo = AgentPersonaRepository(session)
+                persona = await persona_repo.get(user_id, persona_id)
+                if not persona:
+                    logger.warning("反思跳过：角色不存在 persona_id=%s", persona_id)
+                    return
+
+                # 构建反思器（复用聊天模型或使用专用模型）
+                try:
+                    reflector = await ChatReflector.build(
+                        session, user_id, settings.chat_reflection_model
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "反思模型构建失败（跳过反思）: %s", e
+                    )
+                    return
+
+                result = await reflector.reflect(
+                    user_msg=user_msg,
+                    assistant_answer=assistant_answer,
+                    tool_calls_log=tool_calls_log,
+                    persona_name=persona.name,
+                )
+
+                print(f"[REFLECTION] LLM评估: should_remember={result.should_remember} takeaway={result.key_takeaway[:60]}", flush=True)
+                if not result.should_remember:
+                    print("[REFLECTION] 跳过写入: LLM判断本轮无需记忆", flush=True)
+                    return
+
+                block = _format_reflection_block(
+                    result,
+                    user_msg_summary=_summarize_user_msg(user_msg),
+                )
+
+                # 追加到 memory_text
+                current = persona.memory_text or ""
+                if current:
+                    new_text = current.rstrip() + "\n\n" + block
+                else:
+                    new_text = block
+
+                # 软限制：不超过 50000 字符
+                if len(new_text) > 50000:
+                    new_text = "...[截断较早内容]\n\n" + new_text[-49000:]
+
+                # 反思蒸馏：超过上限时 LLM 压缩旧反思为经验总结
+                reflection_count = new_text.count("--- reflection ")
+                if reflection_count > _MAX_RAW_REFLECTIONS:
+                    try:
+                        compact_model = reflector._model
+                        if compact_model is not None:
+                            compacted = await _compact_reflections(new_text, compact_model)
+                            if compacted:
+                                new_text = compacted
+                                logger.info(
+                                    "反思蒸馏完成: persona=%s %d条→%d条",
+                                    persona.name, reflection_count,
+                                    compacted.count("--- reflection "),
+                                )
+                    except Exception as e:
+                        logger.warning("反思蒸馏失败（降级保留原文）: %s", e)
+
+                persona.memory_text = new_text
+                await persona_repo.save(persona)
+
+                reflection_count = new_text.count("--- reflection ")
+                print(f"[REFLECTION] 已写入: persona={persona.name} total_reflections={reflection_count} chars={len(new_text)}", flush=True)
+                logger.info(
+                    "反思已写入角色记忆: persona=%s should_remember=%s",
+                    persona.name, result.should_remember,
+                )
+        except Exception as e:
+            logger.error(
+                "反思写入失败（忽略，不影响主流程）: persona=%s err=%s",
+                persona_id, e, exc_info=True,
+            )
 
     # ── 消息反馈 / 重新生成 ──
 

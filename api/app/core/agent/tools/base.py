@@ -5,6 +5,7 @@
 """
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from langchain_core.tools import StructuredTool
 
@@ -44,6 +45,7 @@ class ToolSpec:
     needs_config: bool = False  # 是否需要额外配置（如联网需 websearch 模型）
     config_hint: str = ""  # 需要配置时的提示文案
     default_enabled: bool = True  # 默认是否启用
+    layer: Literal["core", "extended"] = "core"  # 层级：核心工具始终注入，扩展工具按需发现
 
 
 # 内置工具注册表：key -> ToolSpec

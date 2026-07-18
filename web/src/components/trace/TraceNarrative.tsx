@@ -44,7 +44,10 @@ function isEmbed(s: SpanItem) {
   return s.span_type === 'llm_call' && s.name.startsWith('embed')
 }
 function isTool(s: SpanItem) {
-  return s.span_type === 'tool_call' || s.span_type === 'mcp_call'
+  return s.span_type === 'tool_call' || s.span_type === 'mcp_call' || s.span_type === 'agent_call'
+}
+function isAgentCall(s: SpanItem) {
+  return s.span_type === 'agent_call'
 }
 function isRerank(s: SpanItem) {
   return s.span_type === 'llm_call' && s.name.startsWith('rerank')
@@ -63,6 +66,10 @@ function chatRoundNo(s: SpanItem): number | null {
 // 从 tool span 抽工具名:工具:web_search → web_search
 function toolName(s: SpanItem): string {
   const n = s.name
+  // agent__xxx → 显示为 "呼叫 xxx(角色名)"
+  if (n.startsWith('agent__')) {
+    return '🤝' + n.slice(7).replace(/_/g, ' ')
+  }
   const idx = n.indexOf(':')
   return idx > 0 ? n.slice(idx + 1).trim() : n
 }
@@ -121,25 +128,42 @@ function buildChatNarrative(trace: TraceDetail): { phases: Phase[]; insights: In
     const groupEmbeds = group.filter(isEmbed)
     const groupReranks = group.filter(isRerank)
     if (tools.length > 0) {
-      const toolNames = [...new Set(tools.map(toolName))]
-      const dur = group.reduce((s, x) => s + durMs(x), 0)
-      let desc = ''
-      const internal: string[] = []
-      if (groupEmbeds.length > 0) internal.push(`${groupEmbeds.length} 次向量化`)
-      if (groupReranks.length > 0) internal.push(`${groupReranks.length} 次重排`)
-      const internalNote = internal.length > 0 ? `(内部还做了 ${internal.join('、')})` : ''
-      if (toolNames.length === 1) {
-        desc = `调用 ${toolNames[0]} 工具 ${tools.length} 次${internalNote}`
-      } else {
-        desc = `并行调用了 ${tools.length} 个工具:${toolNames.join(' / ')}${internalNote}`
+      const agentCalls = tools.filter(isAgentCall)
+      const normalTools = tools.filter((t) => !isAgentCall(t))
+
+      // 先展示 agent 调用（如果有）
+      if (agentCalls.length > 0) {
+        const agentNames = [...new Set(agentCalls.map(toolName))]
+        phases.push({
+          icon: '🤝',
+          title: `呼叫角色`,
+          duration: fmtMs(agentCalls.reduce((s, x) => s + durMs(x), 0)),
+          desc: agentNames.join('、'),
+          badge: `${agentCalls.length} 次`,
+        })
       }
-      phases.push({
-        icon: '🔧',
-        title: `执行工具`,
-        duration: fmtMs(dur),
-        desc,
-        badge: `${tools.length} 次`,
-      })
+
+      // 再展示普通工具调用（如果有）
+      if (normalTools.length > 0) {
+        const toolNames = [...new Set(normalTools.map(toolName))]
+        const internal: string[] = []
+        if (groupEmbeds.length > 0) internal.push(`${groupEmbeds.length} 次向量化`)
+        if (groupReranks.length > 0) internal.push(`${groupReranks.length} 次重排`)
+        const internalNote = internal.length > 0 ? `(内部还做了 ${internal.join('、')})` : ''
+        let desc = ''
+        if (toolNames.length === 1) {
+          desc = `调用 ${toolNames[0]} 工具 ${normalTools.length} 次${internalNote}`
+        } else {
+          desc = `并行调用了 ${normalTools.length} 个工具:${toolNames.join(' / ')}${internalNote}`
+        }
+        phases.push({
+          icon: '🔧',
+          title: `执行工具`,
+          duration: fmtMs(normalTools.reduce((s, x) => s + durMs(x), 0)),
+          desc,
+          badge: `${normalTools.length} 次`,
+        })
+      }
     }
   }
 
@@ -302,6 +326,10 @@ function addCommonInsights(
 
 
 function humanName(s: SpanItem): string {
+  // Agent:xxx → 被调 Agent
+  if (s.name.startsWith('Agent:')) {
+    return '🤝被调: ' + s.name.slice(6).trim()
+  }
   const PREFIXES = ['工具:', '检索:', '规划:', '写作:', '审稿:', '修复:']
   for (const p of PREFIXES) {
     if (s.name.startsWith(p)) return s.name.slice(p.length).trim()

@@ -24,6 +24,7 @@ class PersonaCreate(BaseModel):
     mcp_server_ids: list[str] = Field(default_factory=list)
     enable_active_recall: bool = Field(default=True)
     enable_cross_session: bool = Field(default=False)
+    allow_agent_call: bool = Field(default=False)
     kb_ids: list[str] = Field(default_factory=list)
     conversation_scope: str = Field(default=CONVERSATION_SCOPE_SHARED)
     context_window: int = Field(default=20, ge=1, le=100)
@@ -48,6 +49,7 @@ class PersonaUpdate(BaseModel):
     mcp_server_ids: list[str] | None = Field(default=None)
     enable_active_recall: bool | None = Field(default=None)
     enable_cross_session: bool | None = Field(default=None)
+    allow_agent_call: bool | None = Field(default=None)
     kb_ids: list[str] | None = Field(default=None)
     conversation_scope: str | None = Field(default=None)
     context_window: int | None = Field(default=None, ge=1, le=100)
@@ -75,6 +77,7 @@ class PersonaOut(BaseModel):
     mcp_server_ids: list[str]
     enable_active_recall: bool
     enable_cross_session: bool
+    allow_agent_call: bool
     kb_ids: list[str]
     conversation_scope: str
     context_window: int

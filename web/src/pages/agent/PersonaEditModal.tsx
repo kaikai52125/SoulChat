@@ -77,6 +77,7 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
   const [showAvatar, setShowAvatar] = useState(false)
   const [enableActiveRecall, setEnableActiveRecall] = useState(true)
   const [enableCrossSession, setEnableCrossSession] = useState(false)
+  const [allowAgentCall, setAllowAgentCall] = useState(false)
 
   // ── 保存 ──
   const [saving, setSaving] = useState(false)
@@ -107,6 +108,7 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
       setEnableActiveRecall(persona?.enable_active_recall ?? true)
       setEnableCrossSession(persona?.enable_cross_session ?? false)
       setMcpServerIds(persona?.mcp_server_ids ?? [])
+      setAllowAgentCall(persona?.allow_agent_call ?? false)
       ensureKbLoaded()
       // 加载用户 MCP 服务器列表
       import('@/api/mcp').then(({ mcpApi }) => {
@@ -193,6 +195,7 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
       context_window: contextWindow,
       human_mode: humanMode,
       show_avatar: showAvatar,
+      allow_agent_call: allowAgentCall,
     }
     setSaving(true)
     try {
@@ -467,6 +470,13 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>🔌 MCP 工具</span>
               <Switch checked={enableMcp} onChange={setEnableMcp} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>🤝 允许其他角色调用</span>
+              <Switch checked={allowAgentCall} onChange={setAllowAgentCall} />
+            </div>
+            <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: -8, marginBottom: 8 }}>
+              开启后，其他角色可把此角色当作工具调用（如"让代码审查官看一下这段代码"）
             </div>
             {enableMcp && (
               <div style={{ marginTop: 8 }}>

@@ -1,0 +1,13 @@
+你是最终答案合成器。基于以下各步骤的执行结果，生成完整的最终回答。
+
+目标：{{ goal }}
+
+各步骤结果：
+{% for step_id, result in step_results.items() %}
+【{{ step_id }}】{{ step_descriptions.get(step_id, "") }}
+结果：
+{{ result }}
+
+{% endfor %}
+
+请综合以上信息，生成一个完整、流畅、有结构的最终回答。如果结果包含数据或引用，请保留原始出处。

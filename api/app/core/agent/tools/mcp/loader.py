@@ -103,10 +103,51 @@ async def build_mcp_tools(
         for t in raw:
             _rename(t, prefix, seen)
             tools.append(t)
+
+    # 计算并缓存各工具的 embedding（供 tool_search 语义匹配）
+    try:
+        _cache_mcp_embeddings(tools, session, user_id)
+    except Exception as e:
+        logger.warning("缓存 MCP 工具 embedding 失败（忽略）: %s", e)
+
     # 仅在无角色过滤且全部成功时缓存
     if use_cache:
         _MCP_CACHE[uid] = (now + _MCP_CACHE_TTL, fingerprint, list(tools))
     return tools
+
+
+def _cache_mcp_embeddings(
+    tools: list[BaseTool],
+    session: AsyncSession,
+    user_id: uuid.UUID,
+) -> None:
+    """缓存 MCP 工具的 embedding（异步但 fire-and-forget）。
+
+    将嵌入计算作为后台任务调度，不阻塞 build_mcp_tools 返回。
+    """
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(_compute_mcp_embeddings_bg(tools, session, user_id))
+
+
+async def _compute_mcp_embeddings_bg(
+    tools: list[BaseTool],
+    session: AsyncSession,
+    user_id: uuid.UUID,
+) -> None:
+    """后台计算 MCP 工具 embedding 并写入 _TOOL_EMBEDDING_CACHE。"""
+    try:
+        from app.core.agent.tools.registry import _compute_and_cache_embedding
+
+        for tool in tools:
+            key = tool.name
+            name = tool.name.split("__")[-1] if "__" in tool.name else tool.name
+            desc = (tool.description or "")[:300]
+            await _compute_and_cache_embedding(key, name, desc, session, user_id)
+    except Exception as e:
+        logger.warning("计算 MCP 工具 embedding 失败（忽略）: %s", e)
 
 
 @asynccontextmanager

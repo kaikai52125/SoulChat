@@ -72,6 +72,9 @@ class Message(Base):
     sender_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
+    # 群聊任务模式中该消息的角色类型（orchestrator / worker / verifier / user）
+    # 社交模式下为 None
+    task_role: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
     # 附加信息：引用 citations / 工具调用 tool_calls / token usage / 图片等
     meta_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

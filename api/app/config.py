@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     # 定时任务完成后推送通知用的站点地址（拼报告链接）
     notify_site_url: str = "https://soulchat.top"
 
+    # ── 聊天自反思（Chat Reflection）──
+    # 每次回答完成后，异步执行一次 3 维自我检查（完整性/工具利用/用户满意度）
+    chat_reflection_enabled: bool = True
+    # 反思用模型名：None 或 "same" = 复用用户默认聊天模型；暂不支持独立指定
+    chat_reflection_model: str | None = None
+
     # ── V0.0.5 ② Verifier Loop（Loop Engineering 落地）──
     # 是否启用 Verifier Loop。关闭时 research engine 跳过质量复核环节,行为与之前完全一致。
     loop_enabled: bool = True
@@ -161,6 +167,12 @@ class Settings(BaseSettings):
     loop_verifier_kind: str = "same"
     # 最大迭代轮数(N 轮不通过即 ForceExceed 标 unverified 仍展示)
     loop_max_iterations: int = 2
+
+    # ── Two-Speed Agent Router (v0.7)──
+    # 是否启用 Two-Speed 路由（Router → 按复杂度分流）
+    two_speed_enabled: bool = True
+    # Router 用轻量模型名，None 时复用聊天模型
+    router_model: str | None = None
 
     # ── V0.0.5 ③ Agent Tracing(全链路可观测)──
     # 总开关:关闭后所有 tracer.span() 转空操作,零开销

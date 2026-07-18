@@ -75,6 +75,7 @@ class AgentPersonaService:
         persona.context_window = body.context_window
         persona.human_mode = body.human_mode
         persona.show_avatar = body.show_avatar
+        persona.allow_agent_call = body.allow_agent_call
 
     async def create(self, user_id: uuid.UUID, body: PersonaCreate) -> AgentPersona:
         if await self.repo.count(user_id) >= MAX_PERSONAS:
@@ -112,6 +113,7 @@ class AgentPersonaService:
         _set_if("context_window", persona, fields)
         _set_if("human_mode", persona, fields)
         _set_if("show_avatar", persona, fields)
+        _set_if("allow_agent_call", persona, fields)
 
         return await self.repo.save(persona)
 
@@ -158,6 +160,7 @@ class AgentPersonaService:
             "context_window": persona.context_window,
             "human_mode": persona.human_mode,
             "show_avatar": persona.show_avatar,
+            "allow_agent_call": persona.allow_agent_call,
         }
 
 

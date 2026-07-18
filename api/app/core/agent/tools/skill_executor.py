@@ -112,6 +112,8 @@ def build_skill_tools(
     skill_config: dict,
     skill_dir: str,
     record_call=None,
+    session=None,
+    user_id: uuid.UUID | None = None,
 ) -> list[StructuredTool]:
     """从技能配置构建工具列表。
 
@@ -125,6 +127,7 @@ def build_skill_tools(
       ]
 
     每个 tool 名称加 skill__ 前缀避免与内置工具冲突。
+    session/user_id: 传入时后台计算工具 embedding 供 tool_search 语义搜索。
     """
     tools_def = skill_config.get("tools", [])
     if not tools_def:
@@ -152,4 +155,41 @@ def build_skill_tools(
         )
         tools.append(tool)
 
+    # 后台计算 skill 工具 embedding（不阻塞调用方）
+    if session is not None and user_id is not None and tools:
+        _cache_skill_embeddings(tools, session, user_id)
+
     return tools
+
+
+def _cache_skill_embeddings(
+    tools: list[StructuredTool],
+    session,
+    user_id: uuid.UUID,
+) -> None:
+    """缓存 Skill 工具的 embedding（fire-and-forget）。"""
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(_compute_skill_embeddings_bg(tools, session, user_id))
+
+
+async def _compute_skill_embeddings_bg(
+    tools: list[StructuredTool],
+    session,
+    user_id: uuid.UUID,
+) -> None:
+    """后台计算 Skill 工具 embedding 并写入 _TOOL_EMBEDDING_CACHE。"""
+    try:
+        from app.core.agent.tools.registry import _compute_and_cache_embedding
+
+        for tool in tools:
+            key = tool.name
+            name = key.split("__")[-1] if "__" in key else key
+            desc = (tool.description or "")[:300]
+            await _compute_and_cache_embedding(key, name, desc, session, user_id)
+    except Exception as e:
+        from app.core.logging import get_logger
+
+        get_logger(__name__).warning("计算 Skill 工具 embedding 失败（忽略）: %s", e)

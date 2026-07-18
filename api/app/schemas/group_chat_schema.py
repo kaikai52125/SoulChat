@@ -19,6 +19,8 @@ class GroupChatStreamRequest(BaseModel):
     message: str = Field(..., min_length=1)
     # 多模态：图片 file_key 列表（带图时每个角色用多模态模型看图发言）
     image_keys: list[str] = Field(default_factory=list)
+    # 模式切换：social（社交对话）或 task（任务协作），默认 social
+    mode: str = Field(default="social", pattern=r"^(social|task)$")
 
 
 class GroupSayRequest(BaseModel):
@@ -26,6 +28,8 @@ class GroupSayRequest(BaseModel):
 
     message: str = Field(..., min_length=1)
     image_keys: list[str] = Field(default_factory=list)
+    # 模式切换：social（社交对话）或 task（任务协作），默认 social
+    mode: str = Field(default="social", pattern=r"^(social|task)$")
 
 
 class GroupJoinRequest(BaseModel):

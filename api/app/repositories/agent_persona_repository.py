@@ -63,3 +63,23 @@ class AgentPersonaRepository:
             .where(AgentPersona.user_id == user_id, AgentPersona.is_active.is_(True))
             .values(is_active=False)
         )
+
+    async def list_callable(
+        self, user_id: uuid.UUID, exclude_id: uuid.UUID | None = None
+    ) -> list[AgentPersona]:
+        """查询 allow_agent_call=True 的角色，可选排除 exclude_id。
+
+        用于 Agent-as-Tool：找出当前用户下可被其他角色调用的角色列表。
+        """
+        stmt = (
+            select(AgentPersona)
+            .where(
+                AgentPersona.user_id == user_id,
+                AgentPersona.allow_agent_call.is_(True),
+            )
+            .order_by(AgentPersona.sort, AgentPersona.created_at)
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(AgentPersona.id != exclude_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

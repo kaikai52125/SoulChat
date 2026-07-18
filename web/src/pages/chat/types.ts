@@ -79,6 +79,13 @@ export function resolveToolMeta(toolName: string): {
 } {
   const builtin = TOOL_META[toolName]
   if (builtin) return { ...builtin, short: builtin.label }
+  if (toolName.startsWith('agent__')) {
+    // Agent-as-Tool：呼叫其他角色
+    const slug = toolName.slice(7)  // 去掉 'agent__'
+    // slug 转回可读名：下划线 → 空格
+    const readable = slug.replace(/_/g, ' ')
+    return { icon: '🤝', label: `呼叫角色 · ${readable}`, short: readable }
+  }
   if (toolName.includes('__')) {
     const idx = toolName.indexOf('__')
     const server = toolName.slice(0, idx)

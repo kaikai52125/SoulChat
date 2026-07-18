@@ -5,5 +5,6 @@ from app.core.agent.tools.builtin import (  # noqa: F401
     memory,
     persona_memory,
     schedule,
+    tool_search,
     web_search,
 )

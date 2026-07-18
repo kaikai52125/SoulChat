@@ -16,15 +16,20 @@ const TYPE_COLORS: Record<string, { bg: string; border: string; label: string }>
   planner:   { bg: '#EEF4FF', border: '#155EEF', label: '规划' },
   retriever: { bg: '#F0F7FF', border: '#1677FF', label: '检索' },
   writer:    { bg: '#F3FBEF', border: '#369F21', label: '写作' },
-  tool_call: { bg: '#FFF7E6', border: '#FA8C16', label: '工具' },
-  mcp_call:  { bg: '#FFF7E6', border: '#FA8C16', label: 'MCP' },
+  tool_call:   { bg: '#FFF7E6', border: '#FA8C16', label: '工具' },
+  mcp_call:    { bg: '#FFF7E6', border: '#FA8C16', label: 'MCP' },
+  agent_call:  { bg: '#E6F7FF', border: '#1890FF', label: '呼叫Agent' },
   verifier:  { bg: '#F4F1FE', border: '#7A5AF8', label: '审稿' },
   repair:    { bg: '#FCE7F3', border: '#EC4899', label: '修复' },
   llm_call:  { bg: '#F4F6F8', border: '#667085', label: 'LLM' },
   other:     { bg: '#F4F6F8', border: '#98A2B3', label: '其他' },
 }
 
-function colorOf(spanType: string) {
+function colorOf(spanType: string, spanName?: string) {
+  // Agent:xxx → 被调 Agent 的 span，用特殊色
+  if (spanName?.startsWith('Agent:')) {
+    return { bg: '#E6FFFB', border: '#13C2C2', label: '被调Agent' }
+  }
   return TYPE_COLORS[spanType] || TYPE_COLORS.other
 }
 
@@ -207,6 +212,24 @@ export default function TraceTimeline({ trace }: { trace: TraceDetail }) {
 
   const totalMs = Math.max(1, traceEnd - traceStart)
 
+  // 计算每个 span 的嵌套深度（通过 parent_span_id 链）
+  const spanDepth = useMemo(() => {
+    const idToParent = new Map<string, string | null>()
+    for (const s of trace.spans) {
+      idToParent.set(s.span_id, s.parent_span_id)
+    }
+    const cache = new Map<string, number>()
+    function depth(id: string): number {
+      if (cache.has(id)) return cache.get(id)!
+      const pid = idToParent.get(id)
+      const d = pid ? depth(pid) + 1 : 0
+      cache.set(id, d)
+      return d
+    }
+    for (const s of trace.spans) depth(s.span_id)
+    return cache
+  }, [trace.spans])
+
   const rows = useMemo(() => {
     return [...trace.spans]
       .sort((a, b) => a.started_at.localeCompare(b.started_at))
@@ -215,9 +238,10 @@ export default function TraceTimeline({ trace }: { trace: TraceDetail }) {
         const end = (s.finished_at ? new Date(s.finished_at).getTime() : traceStart + totalMs) - traceStart
         const leftPct = Math.max(0, (start / totalMs) * 100)
         const widthPct = Math.max(0.4, ((end - start) / totalMs) * 100)
-        return { span: s, leftPct, widthPct, durationMs: end - start }
+        const depth = spanDepth.get(s.span_id) || 0
+        return { span: s, leftPct, widthPct, durationMs: end - start, depth }
       })
-  }, [trace.spans, traceStart, totalMs])
+  }, [trace.spans, traceStart, totalMs, spanDepth])
 
   if (rows.length === 0) {
     return <Empty description="该任务没有执行步骤(可能 Tracing 已关闭或正在进行)" />
@@ -263,8 +287,8 @@ export default function TraceTimeline({ trace }: { trace: TraceDetail }) {
 
       {/* span 横条列表 —— 点击行内展开详情 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {rows.map(({ span, leftPct, widthPct, durationMs }) => {
-          const c = colorOf(span.span_type)
+        {rows.map(({ span, leftPct, widthPct, durationMs, depth }) => {
+          const c = colorOf(span.span_type, span.name)
           const failed = span.status === 'error'
           const isExpanded = expandedId === span.span_id
           return (
@@ -296,7 +320,7 @@ export default function TraceTimeline({ trace }: { trace: TraceDetail }) {
                   style={{
                     width: labelWidth,
                     flexShrink: 0,
-                    paddingLeft: 8,
+                    paddingLeft: 8 + (depth || 0) * 14,
                     fontSize: labelFontSize,
                     color: '#475467',
                     overflow: 'hidden',
@@ -308,6 +332,12 @@ export default function TraceTimeline({ trace }: { trace: TraceDetail }) {
                   }}
                   title={span.name}
                 >
+                  {/* 树形连线标记：深层 span 前面加 `└` */}
+                  {(depth || 0) > 0 && (
+                    <span style={{ color: '#c0c4cc', fontSize: 10, flexShrink: 0, lineHeight: '14px' }}>
+                      {'│ '.repeat(Math.max(0, (depth || 0) - 1)) + '├'}
+                    </span>
+                  )}
                   <span
                     style={{
                       color: '#98A2B3',
@@ -317,7 +347,7 @@ export default function TraceTimeline({ trace }: { trace: TraceDetail }) {
                       display: 'inline-block',
                     }}
                   >
-                    {isExpanded ? '▼' : '▶'}
+                    {(depth || 0) > 0 ? null : (isExpanded ? '▼' : '▶')}
                   </span>
                   <span
                     style={{

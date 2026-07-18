@@ -8,6 +8,7 @@ import {
   Empty,
   Input,
   Modal,
+  Segmented,
   Space,
   Spin,
   Switch,
@@ -47,6 +48,7 @@ import {
   type GroupConversation,
   type GroupHuman,
   type GroupMember,
+  type GroupRealtimeHandlers,
 } from '@/api/chat'
 import { personaApi, type Persona } from '@/api/personas'
 import MarkdownMessage from '@/components/MarkdownMessage'
@@ -96,6 +98,14 @@ interface GroupUiMessage {
   images?: string[]
   streaming?: boolean
   createdAt?: string
+  // 任务协作模式
+  isTaskPlan?: boolean
+  taskSteps?: Array<{
+    id: string
+    persona: string
+    desc: string
+    status: 'pending' | 'running' | 'done' | 'error'
+  }>
 }
 
 // 把后端群聊历史消息转成页面消息模型（openConversation 与重连 resync 复用）
@@ -264,6 +274,7 @@ export default function GroupChatPage() {
   const [uploading, setUploading] = useState(false)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [chatMode, setChatMode] = useState<'social' | 'task'>('social')
   const [listOpen, setListOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [joinOpen, setJoinOpen] = useState(false)
@@ -473,7 +484,7 @@ export default function GroupChatPage() {
     const onlineTimer = setInterval(refreshHumans, 30000)
     ctrl.signal.addEventListener('abort', () => clearInterval(onlineTimer))
 
-    const handlers = {
+    const handlers: GroupRealtimeHandlers = {
       onReady: () => {
         attempt = 0
         if (connectedOnce) resync() // 这是一次重连，补齐数据
@@ -579,6 +590,67 @@ export default function GroupChatPage() {
         )
         streamingRef.current = null
       },
+      onTaskPlan: (d) => {
+        // 单条"实时状态卡片"，后续 onSubtaskDone 更新它
+        const steps = d.subtasks.map((s) => ({
+          id: s.id,
+          persona: s.assigned_persona,
+          desc: s.description,
+          status: 'pending' as 'pending' | 'running' | 'done' | 'error',
+        }))
+        const planId = `plan-${Date.now()}`
+        const card: GroupUiMessage = {
+          id: planId,
+          role: 'assistant',
+          content: '',
+          createdAt: new Date().toISOString(),
+          senderName: 'Orchestrator',
+          isTaskPlan: true,
+          taskSteps: steps,
+        } as GroupUiMessage
+        setMessages((prev) => [...prev, card])
+        // 马上把所有 subtask 标记为 running
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === planId
+              ? { ...m, taskSteps: m.taskSteps?.map((s) => ({ ...s, status: 'running' as const })) }
+              : m,
+          ),
+        )
+      },
+      onSubtaskStart: (_d) => {
+        // 不做单独消息，状态已在 onTaskPlan 中标记为 running
+      },
+      onTaskOutput: (d) => {
+        // 直接插入完整消息（不走流式通道，无竞态）
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: d.message_id,
+            role: 'assistant' as const,
+            content: d.content,
+            senderName: d.persona_name,
+            createdAt: d.created_at || new Date().toISOString(),
+            streaming: false,
+          },
+        ])
+      },
+      onSubtaskDone: (d) => {
+        // 更新状态卡片里对应步骤的状态
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (!m.isTaskPlan || !m.taskSteps) return m
+            return {
+              ...m,
+              taskSteps: m.taskSteps.map((s) =>
+                s.id === d.subtask_id
+                  ? { ...s, status: d.status === 'ok' ? ('done' as const) : ('error' as const) }
+                  : s,
+              ),
+            }
+          }),
+        )
+      },
       onDone: () => setThinking(false),
       onError: (msg: string) => {
         setThinking(false)
@@ -677,6 +749,7 @@ export default function GroupChatPage() {
         activeId,
         text || '（看图）',
         imgs.map((i) => i.key),
+        chatMode,
       )
       loadConversations()
     } catch {
@@ -1185,6 +1258,34 @@ export default function GroupChatPage() {
                 ? memberMap.get(m.senderPersonaId)
                 : undefined
               const name = m.senderName || member?.name || 'AI'
+              // ── 任务协作状态卡片 ──
+              if (m.isTaskPlan && m.taskSteps) {
+                return (
+                  <div key={m.id} style={{ margin: '12px 0', display: 'flex', justifyContent: 'center' }}>
+                    <div style={{
+                      background: '#f6f8fa', borderRadius: 10, border: '1px solid #d0d7de',
+                      padding: '14px 18px', maxWidth: 480, width: '100%',
+                    }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#1a7f37', marginBottom: 10 }}>
+                        🎯 任务协作中
+                      </div>
+                      {m.taskSteps.map((s) => {
+                        const icon = s.status === 'done' ? '✅' : s.status === 'running' ? '⏳' : s.status === 'error' ? '❌' : '⬜'
+                        return (
+                          <div key={s.id} style={{
+                            fontSize: 13, padding: '4px 0',
+                            color: s.status === 'running' ? '#0969da' : s.status === 'done' ? '#1a7f37' : '#656d76',
+                            opacity: s.status === 'pending' ? 0.6 : 1,
+                          }}>
+                            {icon} <strong>{s.persona}</strong>
+                            <span style={{ marginLeft: 6, color: '#656d76', fontSize: 12 }}>{s.desc.slice(0, 60)}{s.desc.length > 60 ? '…' : ''}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              }
               return (
                 <div key={m.id} className="gc-row gc-row--ai">
                   <PersonaAvatar name={name} avatarUrl={member?.avatar_url} size={38} />
@@ -1425,6 +1526,16 @@ export default function GroupChatPage() {
                   </Upload>
                   <VoiceInputButton
                     onResult={(t) => setInput((prev) => (prev ? prev + ' ' + t : t))}
+                  />
+                  <Segmented
+                    size="small"
+                    value={chatMode}
+                    onChange={(v) => setChatMode(v as 'social' | 'task')}
+                    options={[
+                      { label: '🎭 社交', value: 'social' },
+                      { label: '🎯 任务', value: 'task' },
+                    ]}
+                    style={{ marginLeft: 8 }}
                   />
                 </span>
                 <Button
