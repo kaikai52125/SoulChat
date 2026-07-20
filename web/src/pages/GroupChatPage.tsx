@@ -651,7 +651,11 @@ export default function GroupChatPage() {
           }),
         )
       },
-      onDone: () => setThinking(false),
+      onDone: () => {
+        setThinking(false)
+        // 清除任务计划卡片（在消息列表中移除 isTaskPlan 消息）
+        setMessages((prev) => prev.filter((m) => !m.isTaskPlan))
+      },
       onError: (msg: string) => {
         setThinking(false)
         antdMessage.error(msg)

@@ -28,6 +28,7 @@ logger = get_logger(__name__)
 _SUBTASK_TIMEOUT = 120
 
 
+
 def _datetime_context() -> str:
     """返回当前日期时间的上下文提示。"""
     from datetime import datetime, timezone, timedelta
@@ -56,9 +57,17 @@ class TaskPlan(BaseModel):
 class TaskOrchestrator:
     """Agent 驱动的任务编排器。"""
 
-    def __init__(self, model: ChatOpenAI, tools: list | None = None) -> None:
+    def __init__(
+        self,
+        model: ChatOpenAI,
+        tools: list | None = None,
+        session: object = None,
+        owner_id: object = None,
+    ) -> None:
         self.model = model
         self.tools = tools or []
+        self.session = session  # AsyncSession，Worker 构建自己的 tools 用
+        self.owner_id = owner_id  # 群主 user_id
 
     # ═══════════════════════════════════════════════════════════════
     # 核心方法：全部走 Agent 循环
@@ -77,7 +86,7 @@ class TaskOrchestrator:
         try:
             print(f"\n{'─' * 50}", flush=True)
             print(f"[DECOMPOSE] decompose Agent 启动, 成员: {[m['name'] for m in member_capabilities]}, 工具: {len(self.tools)}个", flush=True)
-            full_text = await self._run_agent([HumanMessage(content=prompt)])
+            full_text = await self._run_agent([HumanMessage(content=prompt)], label="Orchestrator.decompose")
             data = parse_json_object(full_text)
             if not data:
                 raise ValueError("Agent 返回空内容")
@@ -161,15 +170,36 @@ class TaskOrchestrator:
                     }
 
                 print(f"  >> {st.id} ({st.assigned_persona}) 启动", flush=True)
+
+                # ── 构建该角色的完整 Agent（与单聊一致）──
+                try:
+                    from app.core.agent.persona_agent import build_persona_agent
+                    import uuid as _uuid
+                    worker = await build_persona_agent(
+                        self.session, _uuid.UUID(persona["id"]), self.owner_id,
+                    )
+                    if worker is None:
+                        raise ValueError(f"角色 {st.assigned_persona} 不存在")
+                    worker_model = worker.model
+                    worker_tools = worker.tools
+                    worker_system_prompt = worker.system_prompt
+                    print(f"[TASK-WORKER] {st.assigned_persona}: tools={[t.name for t in worker_tools]} has_skill={'stock' in worker_system_prompt.lower()} has_skill_load={'skill_load' in [t.name for t in worker_tools]}", flush=True)
+                except Exception as e:
+                    logger.warning("构建 Worker Agent 失败: %s err=%s", st.assigned_persona, e)
+                    print(f"[TASK-WORKER] {st.assigned_persona}: FALLBACK to orchestrator tools! err={e}", flush=True)
+                    # 降级：用 Orchestrator 的 model + tools，role 只有 system_prompt
+                    worker_model = self.model
+                    worker_tools = self.tools
+                    worker_system_prompt = persona.get("system_prompt", "") or "你是一个助手。"
+
                 context = blackboard.get_context_for(st.assigned_persona)
-                system_prompt = persona.get("system_prompt", "") or "你是一个助手。"
                 task_prompt = (
                     f"你在协作任务中承担的角色：{st.description}\n\n"
                     f"预期产出：{st.expected_output}\n\n"
                     f"当前黑板内容：\n{context}"
                 )
                 messages = [
-                    SystemMessage(content=system_prompt),
+                    SystemMessage(content=worker_system_prompt),
                     SystemMessage(content=task_prompt),
                     HumanMessage(content=(
                         f"你的唯一任务是：「{st.description}」\n\n"
@@ -181,7 +211,7 @@ class TaskOrchestrator:
 
                 try:
                     result_text = await asyncio.wait_for(
-                        self._run_agent(messages),
+                        self._run_agent(messages, model=worker_model, tools=worker_tools, label=f"Worker.{st.assigned_persona}"),
                         timeout=_SUBTASK_TIMEOUT,
                     )
                 except asyncio.TimeoutError:
@@ -233,8 +263,9 @@ class TaskOrchestrator:
         print(f"   prompt: {len(prompt)} 字符", flush=True)
 
         try:
+            # synthesize 不走工具循环——纯汇总，避免迭代被工具消耗导致空返回
             result = await asyncio.wait_for(
-                self._run_agent([HumanMessage(content=prompt)]),
+                self._run_agent([HumanMessage(content=prompt)], tools=[], label="Orchestrator.synthesize"),
                 timeout=120,
             )
             print(f"   OK synthesize 完成 ({time.perf_counter() - t0:.1f}s), {len(result)} 字符", flush=True)
@@ -252,22 +283,30 @@ class TaskOrchestrator:
     # 内部方法
     # ═══════════════════════════════════════════════════════════════
 
-    async def _run_agent(self, messages: list) -> str:
+    async def _run_agent(
+        self, messages: list, model: ChatOpenAI | None = None, tools: list | None = None,
+        label: str = "Agent",
+    ) -> str:
         """运行 function calling Agent，收集最终文本。
 
         decompose / synthesize / subtask 三个场景共用此方法。
-        Agent 可调用 self.tools 中的任意工具。
+        不传 model/tools 时用 self.model + self.tools（Orchestrator 自身）。
         """
         from app.core.agent.orchestrator import run_function_calling
 
+        _model = model or self.model
+        _tools = tools if tools is not None else self.tools
+
         collected = ""
-        async for ev in run_function_calling(self.model, self.tools, messages):
-            if ev["type"] in ("token", "final"):
+        async for ev in run_function_calling(_model, _tools, messages):
+            if ev["type"] == "final":
+                collected = ev.get("text", "")  # final 是完整文本，替换而非追加
+            elif ev["type"] == "token":
                 collected += ev.get("text", "")
             elif ev["type"] == "tool_start":
                 tool = ev.get("tool", "?")
                 query = ev.get("query", "")[:60]
-                print(f"     [TOOL] Agent 调工具: {tool}({query})", flush=True)
+                print(f"     [TOOL] [{label}] 调工具: {tool}({query})", flush=True)
         return collected.strip()
 
     @staticmethod

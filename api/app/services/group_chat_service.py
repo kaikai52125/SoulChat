@@ -192,7 +192,10 @@ class GroupChatService:
                     "id": str(persona.id),
                     "name": persona.name,
                     "system_prompt": persona.system_prompt or "",
+                    "memory_text": persona.memory_text or "",
+                    "temperature": persona.temperature,
                     "avatar_url": avatar_url,
+                    "skill_ids": list(persona.skill_ids or []),
                     "enable_knowledge": persona.enable_knowledge,
                     "enable_memory": persona.enable_memory,
                     "enable_web_search": persona.enable_web_search,
@@ -678,6 +681,8 @@ class GroupChatService:
                 model=model,
                 mode="task",
                 tools=task_tools,
+                session=self.session,
+                owner_id=owner_id,
             ):
                 if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start"):
                     await bus.publish(cid, event["type"], event)
@@ -725,6 +730,11 @@ class GroupChatService:
         cid = str(conv_id)
         human_mode = await self._human_mode(owner_id)
 
+        # ── @ 指定优先：点名了某个 AI 角色就让他直接说（不走任务模式）──
+        mentioned = parse_mention(user_text, member_names)
+        if mentioned:
+            mode = "social"  # 强制社交模式，点名就该让他说
+
         # ── 任务协作模式 ──
         print(f"\n🔑 _ai_turn mode={mode!r} user_text={user_text[:50]!r}", flush=True)
         if mode == "task":
@@ -735,7 +745,6 @@ class GroupChatService:
         transcript = build_transcript(history)
 
         # @ 指定优先（跳过主持人），否则主持人调度
-        mentioned = parse_mention(user_text, member_names)
         if mentioned:
             speakers = [mentioned]
         else:
@@ -782,6 +791,15 @@ class GroupChatService:
             member = name_to_member.get(name)
             if not member:
                 continue
+            # 构建该角色的完整 Agent（与单聊一致）
+            from app.core.agent.persona_agent import build_persona_agent
+            worker_agent = await build_persona_agent(
+                self.session, uuid.UUID(member["id"]), owner_id,
+            )
+            if worker_agent is None:
+                print(f"[SOCIAL] build_persona_agent returned None for member={member['name']} id={member['id']} owner_id={owner_id}", flush=True)
+                continue
+            print(f"[SOCIAL] {member['name']}: tools={[t.name for t in worker_agent.tools]} prompt_has_skill={'stock' in worker_agent.system_prompt.lower()}", flush=True)
             await bus.publish(
                 cid,
                 "speaker_start",
@@ -796,10 +814,10 @@ class GroupChatService:
             try:
                 async for ev in self._speak(
                     speaker_model,
-                    member,
+                    member["name"],
                     member_names,
                     transcript,
-                    owner_id,
+                    worker_agent,
                     image_parts,
                     human_mode=human_mode,
                 ):
@@ -938,8 +956,13 @@ class GroupChatService:
             # 构 transcript（含刚落库的用户消息）
             history = await self._history_for_transcript(conv.id)
 
+            # ── @ 指定优先：点名了某个 AI 角色就让他直接说（不走任务模式）──
+            task_mode = body.mode == "task"
+            if task_mode and parse_mention(user_text, member_names):
+                task_mode = False  # @mention → 强制社交模式
+
             # ── 任务协作模式 ──
-            if body.mode == "task":
+            if task_mode:
                 model, _ = await build_default_chat_model(
                     self.session, user_id, temperature=0.7, streaming=False
                 )
@@ -950,6 +973,8 @@ class GroupChatService:
                         history=history,
                         model=model,
                         mode="task",
+                        session=self.session,
+                        owner_id=user_id,
                     ):
                         if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start"):
                             # 将协作内部事件包装为 meta 事件
@@ -1041,6 +1066,15 @@ class GroupChatService:
             member = name_to_member.get(name)
             if not member:
                 continue
+            # 构建该角色的完整 Agent（与单聊一致）
+            from app.core.agent.persona_agent import build_persona_agent
+            worker_agent = await build_persona_agent(
+                self.session, uuid.UUID(member["id"]), user_id,
+            )
+            if worker_agent is None:
+                print(f"[STREAM] build_persona_agent returned None for member={member['name']} id={member['id']}", flush=True)
+                continue
+            print(f"[STREAM] {member['name']}: tools={[t.name for t in worker_agent.tools]} prompt_has_skill={'stock' in worker_agent.system_prompt.lower()}", flush=True)
             yield _sse(
                 "speaker_start",
                 {
@@ -1054,10 +1088,10 @@ class GroupChatService:
             try:
                 async for ev in self._speak(
                     speaker_model,
-                    member,
+                    member["name"],
                     member_names,
                     transcript,
-                    user_id,
+                    worker_agent,
                     image_parts,
                     human_mode=human_mode,
                 ):
@@ -1140,6 +1174,78 @@ class GroupChatService:
                 logger.warning("群聊读取/压缩图片失败（跳过）: %s", e)
         return parts
 
+    async def _augment_member_skills(self, member: dict, owner_id: uuid.UUID) -> None:
+        """为群聊成员加载 Skill，结果写入 member dict（_skill_prompt, _skill_tools, _skill_tool_keys）。"""
+        member["_skill_prompt"] = ""
+        member["_skill_tools"] = []
+        member["_skill_tool_keys"] = []
+
+        try:
+            from app.repositories.skill_repository import SkillRepository
+            persona_id = uuid.UUID(member["id"])
+            all_skills = [
+                s for s in await SkillRepository(self.session).list_by_persona(persona_id)
+                if s.enabled
+            ]
+        except Exception:
+            return
+
+        if not all_skills:
+            return
+
+        resident = [s for s in all_skills if (s.config or {}).get("is_resident", True)]
+        on_demand = [s for s in all_skills if not (s.config or {}).get("is_resident", True)]
+
+        # 常驻 Skill prompt
+        prompts = []
+        tool_keys_set: set[str] = set()
+        script_tools = []
+        for sk in resident:
+            p = (sk.prompt or "").strip()
+            if p:
+                prompts.append(f"【当前任务能力：{sk.name}】\n{p}")
+            if sk.tool_keys:
+                tool_keys_set.update(sk.tool_keys)
+            if sk.storage_path and sk.config.get("tools"):
+                try:
+                    from app.core.agent.tools.skill_executor import build_skill_tools
+                    st = build_skill_tools(
+                        skill_id=sk.id, skill_config=sk.config,
+                        skill_dir=sk.storage_path, record_call=None,
+                        session=self.session, user_id=owner_id,
+                    )
+                    script_tools.extend(st)
+                except Exception as e:
+                    logger.warning("群聊 Skill 脚本工具构建失败: %s err=%s", sk.name, e)
+
+        member["_skill_prompt"] = "\n".join(prompts) if prompts else ""
+        member["_skill_tools"] = script_tools
+        member["_skill_tool_keys"] = list(tool_keys_set) if tool_keys_set else []
+
+        # 按需 Skill 提示
+        if on_demand:
+            lines = ["【可按需加载的技能】使用时调用 skill_load 工具加载："]
+            for s in on_demand:
+                desc = (s.description or "").strip()
+                meta = s.name
+                if desc:
+                    meta += f"：{desc}"
+                script_names = []
+                for td in (s.config or {}).get("tools") or []:
+                    if isinstance(td, dict) and td.get("name"):
+                        script_names.append(td["name"])
+                if script_names:
+                    meta += f"（可用脚本：{', '.join(script_names)}）"
+                if s.tool_keys:
+                    meta += f"（建议工具：{', '.join(s.tool_keys)}）"
+                lines.append(f"  • {meta}")
+            on_demand_prompt = "\n".join(lines)
+            member["_skill_prompt"] = (
+                member["_skill_prompt"] + "\n\n" + on_demand_prompt
+                if member["_skill_prompt"]
+                else on_demand_prompt
+            )
+
     async def _build_member_tools(self, member: dict, owner_id: uuid.UUID) -> list:
         """按单个角色配置构建工具列表。"""
         if not any([
@@ -1174,39 +1280,35 @@ class GroupChatService:
     async def _speak(
         self,
         model,
-        member: dict,
+        member_name: str,
         member_names: list[str],
         transcript: str,
-        owner_id: uuid.UUID,
+        agent,  # PersonaAgent
         image_parts: list[dict] | None = None,
         human_mode: bool = False,
     ) -> AsyncGenerator[dict, None]:
-        """让单个角色发言。工具按该角色的 Agent 配置动态构建。"""
+        """让单个角色发言。使用 build_persona_agent() 构建的完整 Agent 配置。"""
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from app.core.agent.orchestrator import run_function_calling, run_react
 
-        # 按当前发言角色的配置构建工具 + 注入 persona_id 供 save_to_persona_memory 使用
-        from app.core.agent.tools.builtin.persona_memory import set_current_persona
-        set_current_persona(member["id"])
-        tools = await self._build_member_tools(member, owner_id)
+        tools = list(agent.tools)
         image_parts = image_parts or []
-        # 角色发言的 system prompt（人设 + 群聊场景说明 + 当前日期 + 可选真人模式）
         sys_messages = build_speaker_messages(
-            member["system_prompt"],
-            member["name"],
+            agent.system_prompt,
+            member_name,
             member_names,
             transcript,
             with_tool_hint=bool(tools),
             human_mode=human_mode,
         )
         system_prompt = sys_messages[0].content if sys_messages else ""
-        turn_text = f"现在轮到你「{member['name']}」发言，请基于上面的群聊记录自然接话。"
+        turn_text = f"现在轮到你「{member_name}」发言，请基于上面的群聊记录自然接话。"
 
         # 纯人设、无图：直接流式
         if not tools and not image_parts:
             async for token in stream_speaker(
-                model, member["system_prompt"], member["name"], member_names, transcript,
+                model, agent.system_prompt, member_name, member_names, transcript,
                 human_mode=human_mode,
             ):
                 yield {"type": "token", "text": token}

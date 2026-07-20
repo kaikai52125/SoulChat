@@ -929,15 +929,26 @@ class ChatService:
                 )
             if hints:
                 system_prompt = (system_prompt + "\n\n" + "\n".join(hints)).strip()
-        # 当存在按需 Skill 时，追加 skill_load 使用提示
+        # 当存在按需 Skill 时，追加 skill_load 使用提示（含元数据）
         if on_demand_skills:
-            names = "、".join(s.name for s in on_demand_skills)
-            on_demand_hint = (
-                f"以下技能当前未激活，需要时可调用 skill_load 工具按需加载：{names}。"
-                f"加载后你会获得该技能的详细说明和可用脚本，"
-                f"再使用 bash 工具执行相关脚本完成任务。"
-            )
-            system_prompt = (system_prompt + "\n\n" + on_demand_hint).strip()
+            lines = ["【可按需加载的技能】使用时调用 skill_load 工具加载："]
+            for s in on_demand_skills:
+                desc = (s.description or "").strip()
+                script_names: list[str] = []
+                tools_def = (s.config or {}).get("tools") or []
+                if isinstance(tools_def, list):
+                    for td in tools_def:
+                        if isinstance(td, dict) and td.get("name"):
+                            script_names.append(td["name"])
+                meta = s.name
+                if desc:
+                    meta += f"：{desc}"
+                if script_names:
+                    meta += f"（可用脚本：{', '.join(script_names)}）"
+                if s.tool_keys:
+                    meta += f"（建议内置工具：{', '.join(s.tool_keys)}）"
+                lines.append(f"  • {meta}")
+            system_prompt = (system_prompt + "\n\n" + "\n".join(lines)).strip()
         # 有工具时追加并行策略提示：鼓励 Agent 对独立工具调用在同一轮并行发出
         if tools:
             parallel_hint = (

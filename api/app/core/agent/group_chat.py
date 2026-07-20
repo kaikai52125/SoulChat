@@ -186,6 +186,8 @@ async def _run_task_mode(
     history: list[dict],
     model: ChatOpenAI,
     tools: list | None = None,
+    session: object = None,
+    owner_id: object = None,
 ) -> AsyncGenerator[dict, None]:
     """任务协作模式：Orchestrator 分解 → 并行执行 → 汇总 → (Verifier)。
 
@@ -202,9 +204,11 @@ async def _run_task_mode(
         members: 群组成员列表 [{id, name, system_prompt, ...}]
         history: 群聊历史消息
         model: 语言模型
+        session: AsyncSession（Worker 构建自己工具用）
+        owner_id: 群主 user_id
     """
     blackboard = SharedBlackboard()
-    orchestrator = TaskOrchestrator(model, tools=tools)
+    orchestrator = TaskOrchestrator(model, tools=tools, session=session, owner_id=owner_id)
 
     print(f"\n{'>>' * 35}", flush=True)
     print(f"[TASK-MODE] 进入任务协作模式 _run_task_mode", flush=True)
@@ -294,6 +298,8 @@ async def run_group_chat(
     model: ChatOpenAI,
     mode: str = "social",
     tools: list | None = None,
+    session: object = None,
+    owner_id: object = None,
 ) -> AsyncGenerator[dict, None]:
     """群聊双模式入口。
 
@@ -305,12 +311,17 @@ async def run_group_chat(
         history: 群聊历史消息
         model: 语言模型
         mode: "social"（社交对话）或 "task"（任务协作），默认 "social"
+        session: AsyncSession（任务模式下 Worker 构建自己工具用）
+        owner_id: 群主 user_id
 
     社交模式下，调用方需自行处理 speaker 调度与消息落库；
     任务协作模式下，产出编排好的协作结果。
     """
     if mode == "task":
-        async for event in _run_task_mode(user_message, members, history, model, tools=tools):
+        async for event in _run_task_mode(
+            user_message, members, history, model,
+            tools=tools, session=session, owner_id=owner_id,
+        ):
             yield event
     else:
         # 社交模式：保持完全兼容
