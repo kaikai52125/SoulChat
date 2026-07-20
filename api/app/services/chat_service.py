@@ -12,10 +12,11 @@ import uuid
 from collections.abc import AsyncGenerator
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.agent.orchestrator import run_function_calling, run_react, run_two_speed
+from app.core.agent.orchestrator import run_function_calling, run_react, stream_plain
 from app.core.agent.reflector import (
     ChatReflector,
     _MAX_RAW_REFLECTIONS,
@@ -917,20 +918,55 @@ class ChatService:
                 )
             if hints:
                 system_prompt = (system_prompt + "\n\n" + "\n".join(hints)).strip()
+        # 有工具时追加并行策略提示：鼓励 Agent 对独立工具调用在同一轮并行发出
+        if tools:
+            parallel_hint = (
+                "当你面对需要多步检索或对比分析的复杂问题时，请先在脑中规划需要哪些信息，"
+                "然后在同一轮中同时调用多个互相独立的工具（系统会并行执行），"
+                "最后基于所有结果综合回答。不要一步步串行调用可以并行的工具。"
+            )
+            system_prompt = (system_prompt + "\n\n" + parallel_hint).strip()
         if settings.two_speed_enabled and supports_function_call(config):
-            # Two-Speed Router 路径：按消息复杂度自动分流
+            # Router 路径：轻量分类 → chat 不挂工具 / tool 挂工具
             lc_messages = []
             if system_prompt:
                 lc_messages.append(SystemMessage(content=system_prompt))
             lc_messages.extend(history)
             lc_messages.append(HumanMessage(content=composed_text))
-            async for ev in run_two_speed(
-                model, tools, lc_messages,
-                persona=persona,
-                router_model=settings.router_model,
-                stats_holder=stats_holder,
-            ):
-                yield ev
+
+            from app.core.agent.router import AgentRouter, build_tools_summary
+
+            router_llm = model
+            if settings.router_model:
+                try:
+                    router_llm = ChatOpenAI(
+                        model=settings.router_model,
+                        api_key=getattr(model, "openai_api_key", "") or "",
+                        base_url=getattr(model, "openai_api_base", "") or getattr(model, "base_url", "") or "",
+                        temperature=0.0,
+                        streaming=False,
+                    )
+                except Exception as e:
+                    logger.warning("构建 Router 模型失败，复用聊天模型: %s", e)
+
+            router = AgentRouter(router_llm)
+            try:
+                route_result = await router.classify(
+                    composed_text, build_tools_summary(tools)
+                )
+                route = route_result.route
+            except Exception as e:
+                logger.warning("Router 分类异常，回退到 tool: %s", e)
+                route = "tool"
+
+            if route == "chat":
+                async for ev in stream_plain(model, lc_messages):
+                    yield ev
+            else:
+                async for ev in run_function_calling(
+                    model, tools, lc_messages, stats_holder=stats_holder
+                ):
+                    yield ev
         elif not tools:
             lc_messages: list = []
             if system_prompt:

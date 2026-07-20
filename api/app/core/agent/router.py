@@ -1,9 +1,9 @@
-"""AgentRouter: 轻量消息分类器，4 路路由（trivial/chat/single_tool/multi_step）。
+"""AgentRouter: 轻量消息分类器，2 路路由（chat/tool）。
 
 用法:
     router = AgentRouter(model)
     result = await router.classify("你好", "知识库搜索, 联网搜索")
-    # RouteResult(route="trivial", confidence=0.95, reason="纯问候")
+    # RouteResult(route="chat", confidence=0.95, reason="纯问候")
 """
 import json
 from typing import Literal
@@ -20,17 +20,17 @@ logger = get_logger(__name__)
 
 class RouteResult(BaseModel):
     """路由分类结果。"""
-    route: Literal["trivial", "chat", "single_tool", "multi_step"]
+    route: Literal["chat", "tool"]
     confidence: float
     reason: str
 
 
 class AgentRouter:
-    """用 LLM 对用户消息做 4 路路由分类，决定后续编排策略。
+    """用 LLM 对用户消息做 2 路路由分类，决定是否挂载工具。
 
     设计目标：
     - prompt 极短（~200 token），用最轻量模型，目标 < 500ms
-    - 异常时防御性回退到 single_tool（保守选择，保留工具能力）
+    - 异常时防御性回退到 tool（保守选择，保留工具能力）
     - 支持配置 router_model 切换轻量模型，None 时复用聊天模型
     """
 
@@ -44,10 +44,10 @@ class AgentRouter:
 
         Args:
             message: 用户输入文本。
-            available_tools_summary: 可用工具描述（逗号分隔的工具名列表或摘要）。
+            available_tools_summary: 可用工具描述。
 
         Returns:
-            RouteResult: 路由分类结果。异常时返回 route="single_tool" 的防御性结果。
+            RouteResult: 路由分类结果。异常时返回 route="tool" 的防御性结果。
         """
         prompt = render_agent_prompt(
             "router.jinja2",
@@ -61,19 +61,16 @@ class AgentRouter:
         try:
             resp = await self._model.ainvoke(messages)
             text = resp.content if isinstance(resp.content, str) else str(resp.content)
-            # 尝试提取 JSON 块
             parsed = self._extract_json(text)
-            route = parsed.get("route", "single_tool")
+            route = parsed.get("route", "tool")
             confidence = float(parsed.get("confidence", 0.0))
             reason = str(parsed.get("reason", ""))
             # 校验 route 合法性
-            valid_routes = {"trivial", "chat", "single_tool", "multi_step"}
-            if route not in valid_routes:
-                logger.warning("Router 返回无效路由 %s，回退到 single_tool", route)
-                route = "single_tool"
+            if route not in ("chat", "tool"):
+                logger.warning("Router 返回无效路由 %s，回退到 tool", route)
+                route = "tool"
                 confidence = 0.0
                 reason = "无效路由"
-            # confidence 低于阈值时记录警告（但照常使用结果）
             if confidence < 0.7:
                 logger.warning(
                     "Router 置信度偏低: route=%s confidence=%.2f reason=%s",
@@ -81,9 +78,9 @@ class AgentRouter:
                 )
             return RouteResult(route=route, confidence=confidence, reason=reason)
         except Exception as e:
-            logger.warning("Router 分类失败（回退到 single_tool）: %s", e)
+            logger.warning("Router 分类失败（回退到 tool）: %s", e)
             return RouteResult(
-                route="single_tool", confidence=0.0, reason="router error",
+                route="tool", confidence=0.0, reason="router error",
             )
 
     @staticmethod

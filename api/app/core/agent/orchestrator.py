@@ -23,10 +23,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 
-from app.core.agent.dag_executor import DAGExecutor, run_dag_with_events
-from app.core.agent.planner import MicroPlanner, PlanError
 from app.core.agent.prompt_renderer import render_agent_prompt
-from app.core.agent.router import AgentRouter, build_tools_summary
 from app.core.agent.tracing import get_tracer
 from app.core.logging import get_logger
 
@@ -466,16 +463,13 @@ async def run_react(
     yield {"type": "final", "text": "（多轮工具调用后仍未得到结论）"}
 
 
-# ── Two-Speed Router 相关函数 ──────────────────────────────────────────
-
-
 async def stream_plain(
     model: ChatOpenAI,
     messages: list,
 ) -> AsyncGenerator[dict, None]:
     """纯 LLM 流式输出（不挂工具）。
 
-    适用于 trivial/chat 路由。产出 token / final 事件。
+    适用于 chat 路由（闲聊/简单对话）。产出 token / final 事件。
     """
     full_text = ""
     async for chunk in model.astream(messages):
@@ -486,157 +480,7 @@ async def stream_plain(
     yield {"type": "final", "text": full_text or "（未生成回答）"}
 
 
-async def run_two_speed(
-    model: ChatOpenAI,
-    tools: list[StructuredTool],
-    messages: list,
-    persona=None,
-    router_model: str | None = None,
-    stats_holder: dict[str, dict] | None = None,
-) -> AsyncGenerator[dict, None]:
-    """Two-Speed 编排入口：Router 分类 → 按路由分发。
-
-    路由策略：
-    - trivial / chat → stream_plain（纯 LLM，不挂工具）
-    - single_tool   → run_function_calling（当前默认行为）
-    - multi_step    → MicroPlanner.plan() → DAGExecutor.execute() → 综合
-
-    Router / Planner 异常时自动 fallback 到 run_function_calling()。
-    """
-    # 从 messages 中提取最后一条 user 消息
-    user_message = ""
-    for m in reversed(messages):
-        if hasattr(m, "content") and isinstance(m.content, str) and m.content:
-            user_message = m.content
-            break
-        if isinstance(m, dict) and m.get("role") == "user":
-            user_message = m.get("content", "")
-            break
-
-    tools_summary = build_tools_summary(tools)
-
-    # 构建 Router 模型（router_model 为 None 时复用聊天模型）
-    router_llm = model
-    if router_model:
-        try:
-            router_llm = ChatOpenAI(
-                model=router_model,
-                api_key=getattr(model, "openai_api_key", "") or "",
-                base_url=(
-                    getattr(model, "openai_api_base", "")
-                    or getattr(model, "base_url", "")
-                    or ""
-                ),
-                temperature=0.0,
-                streaming=False,
-            )
-        except Exception as e:
-            logger.warning("构建 Router 模型失败，复用聊天模型: %s", e)
-            router_llm = model
-
-    router = AgentRouter(router_llm)
-
-    # Step 1: Router 分类
-    try:
-        route_result = await router.classify(user_message, tools_summary)
-        route = route_result.route
-        logger.info(
-            "Two-Speed Router: route=%s confidence=%.2f reason=%s",
-            route, route_result.confidence, route_result.reason,
-        )
-    except Exception as e:
-        logger.warning("Router 分类异常，fallback 到 run_function_calling: %s", e)
-        route = "single_tool"
-
-    # Step 2: 按路由分发
-    if route in ("trivial", "chat"):
-        # 纯 LLM 路径：不挂工具
-        async for event in stream_plain(model, messages):
-            yield event
-
-    elif route == "single_tool":
-        # 单工具路径：使用现有 function calling 循环
-        async for event in run_function_calling(
-            model, tools, messages, stats_holder=stats_holder,
-        ):
-            yield event
-
-    else:  # multi_step
-        # 多步路径：Planner → DAGExecutor → 综合
-        try:
-            planner = MicroPlanner(model)
-            plan = await planner.plan(user_message, tools_summary)
-
-            logger.info(
-                "Two-Speed Planner: goal=%s steps=%d",
-                plan.goal[:80], len(plan.steps),
-            )
-
-            # 使用带事件的 DAG 执行
-            async for event in run_dag_with_events(
-                DAGExecutor(), plan, model, tools, messages, persona,
-            ):
-                yield event
-
-            # 综合各步骤结果为最终回答
-            # 这里我们直接在 run_dag_with_events 中处理了合成，
-            # 但需要从 DAG 结果中构建最终答案
-            # 由于 run_dag_with_events yield step_done 而不 yield final，
-            # 我们重新运行 DAG 获取结果用于合成
-            executor = DAGExecutor()
-            step_results = await executor.execute(
-                plan, model, tools, messages, persona,
-            )
-
-            # 找到综合步（tool_hint=None）或最后一步作为最终回答
-            synthesis_steps = [s for s in plan.steps if s.tool_hint is None]
-            if synthesis_steps:
-                # 综合步已经由 executor 执行并得到结果
-                final_step = synthesis_steps[-1]
-                final_text = step_results.get(final_step.id, "")
-                if final_text:
-                    yield {"type": "token", "text": final_text}
-                    yield {"type": "final", "text": final_text}
-                else:
-                    # 如果没有综合步结果，用 executor 的全部结果构建回答
-                    assembled = _assemble_dag_results(plan, step_results)
-                    yield {"type": "token", "text": assembled}
-                    yield {"type": "final", "text": assembled}
-            else:
-                # 没有综合步，拼接所有结果
-                assembled = _assemble_dag_results(plan, step_results)
-                yield {"type": "token", "text": assembled}
-                yield {"type": "final", "text": assembled}
-
-        except PlanError as e:
-            logger.warning("Planner 失败，fallback 到 run_function_calling: %s", e)
-            async for event in run_function_calling(
-                model, tools, messages, stats_holder=stats_holder,
-            ):
-                yield event
-        except Exception as e:
-            logger.warning(
-                "multi_step 路径异常，fallback 到 run_function_calling: %s", e,
-            )
-            async for event in run_function_calling(
-                model, tools, messages, stats_holder=stats_holder,
-            ):
-                yield event
-
-
-def _assemble_dag_results(plan, step_results: dict[str, str]) -> str:
-    """拼接 DAG 执行结果为最终文本（无综合步时的兜底方案）。"""
-    parts: list[str] = []
-    for s in plan.steps:
-        result = step_results.get(s.id, "").strip()
-        if result:
-            parts.append(f"【{s.description}】\n{result}")
-    if parts:
-        return "\n\n".join(parts)
-    return "（多步执行完成）"
-
-
 __all__ = [
-    "run_function_calling", "run_react", "run_two_speed", "stream_plain",
+    "run_function_calling", "run_react", "stream_plain",
     "MAX_TOOL_ITERATIONS",
 ]
