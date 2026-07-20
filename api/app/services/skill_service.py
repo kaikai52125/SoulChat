@@ -14,6 +14,7 @@ import shutil
 import uuid
 import zipfile
 
+import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -36,46 +37,42 @@ SKILL_STORAGE_ROOT = os.path.join(settings.storage_dir, "skills")
 # ── SKILL.md 解析（模块级辅助函数）──
 
 def _parse_frontmatter_yaml(raw: str) -> dict:
-    """解析精简 YAML frontmatter。兼容 Claude Code / Cursor / Continue 等主流 SKILL.md 格式。
+    """用 yaml.safe_load 解析 YAML frontmatter。兼容 Claude Code / Cursor / Continue 等主流 SKILL.md 格式。
 
-    字段映射：
+    字段映射:
       name / description / icon
       tool_keys / allowed-tools → tool_keys（工具白名单）
-      tools → 脚本工具声明列表
+      tools → 脚本工具声明列表（支持嵌套对象列表）
       triggers → config.triggers（快捷触发词，自动转 quick_prompts）
       model → config.model（可选）
     """
+    try:
+        parsed = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as e:
+        raise BizError(f"YAML 解析失败: {e}", code=4070) from e
+
+    if not isinstance(parsed, dict):
+        raise BizError("SKILL.md frontmatter 必须为 YAML 映射", code=4070)
+
     meta: dict = {}
-    current_key: str | None = None
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if ":" in stripped and not stripped.startswith(" ") and not stripped.startswith("-"):
-            kv = stripped.split(":", 1)
-            key = kv[0].strip()
-            val = kv[1].strip()
-            if val == "":
-                meta[key] = []
-                current_key = key
-            else:
-                meta[key] = val
-                current_key = None
-        elif stripped.startswith("- ") and current_key:
-            item = stripped[2:].strip().strip('"').strip("'")
-            if isinstance(meta.get(current_key), list):
-                meta[current_key].append(item)
-        else:
-            current_key = None
+
+    for k, v in parsed.items():
+        meta[k] = v
 
     # 别名兼容
     if "allowed-tools" in meta:
         raw_val = meta.pop("allowed-tools")
         meta.setdefault("tool_keys", raw_val if isinstance(raw_val, list) else [raw_val])
 
+    # tool_keys 归一化
     if "tool_keys" in meta and not isinstance(meta["tool_keys"], list):
         meta["tool_keys"] = [meta["tool_keys"]]
     meta.setdefault("tool_keys", [])
+
+    # triggers 归一化
+    if "triggers" in meta and not isinstance(meta["triggers"], list):
+        meta["triggers"] = [meta["triggers"]]
+
     meta.setdefault("icon", "🧩")
     meta.setdefault("description", "")
     return meta
@@ -256,7 +253,10 @@ class SkillService:
             skill.enabled = fields["enabled"]
         if "config" in fields and fields["config"] is not None:
             cfg = body.config
-            skill.config = cfg.model_dump() if isinstance(cfg, SkillConfig) else cfg
+            incoming = cfg.model_dump() if isinstance(cfg, SkillConfig) else cfg
+            # 合并而非替换：保留现有 config 中前端未传的字段（如 tools）
+            existing = skill.config or {}
+            skill.config = {**existing, **incoming}
         if "is_public" in fields and fields["is_public"] is not None:
             skill.is_public = fields["is_public"]
         return await self.repo.save(skill)

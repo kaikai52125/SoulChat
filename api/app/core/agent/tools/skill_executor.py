@@ -20,19 +20,38 @@ logger = get_logger(__name__)
 SCRIPT_TIMEOUT = 30  # 脚本超时（秒）
 MAX_OUTPUT_BYTES = 64 * 1024  # stdout 上限 64KB
 
+# 后缀 → 解释器映射
+_SUFFIX_INTERPRETER = {
+    ".py": "python",
+    ".sh": "bash",
+    ".js": "node",
+    ".R": "Rscript",
+    ".rb": "ruby",
+}
+
+
+def _detect_interpreter(script_path: str) -> str:
+    """根据文件后缀自动选择解释器，默认 python。"""
+    import os
+    _, ext = os.path.splitext(script_path)
+    return _SUFFIX_INTERPRETER.get(ext.lower(), "python")
+
 
 async def _run_script(
-    script_path: str, params: dict, cwd: str
+    script_path: str, params: dict, cwd: str, interpreter: str | None = None
 ) -> str:
-    """子进程执行 Python 脚本，stdin 传入 JSON，stdout 接收 JSON。
+    """子进程执行脚本，stdin 传入 JSON，stdout 接收 JSON。
 
     返回 stdout 文本（去首尾空白）。抛出 RuntimeError 如果超时/非零退出码。
+    根据文件后缀自动选择解释器（.py→python, .sh→bash, .js→node 等），
+    可通过 interpreter 参数显式覆盖。
     """
     input_json = json.dumps(params, ensure_ascii=False)
+    cmd = interpreter or _detect_interpreter(script_path)
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "python", script_path,
+            cmd, script_path,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -99,9 +118,13 @@ def _make_tool(
         except RuntimeError as e:
             return f"脚本执行失败：{e}"
 
+    # 推断解释器提示
+    interpreter = _detect_interpreter(os.path.join(skill_dir, script_name))
+    hint = f"。执行方式: {interpreter} {script_name}"
+
     return StructuredTool.from_function(
         name=f"skill__{tool_name}",
-        description=tool_desc,
+        description=tool_desc + hint,
         func=_run,
         args_schema=_SkillParams,
     )

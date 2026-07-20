@@ -142,6 +142,17 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
     }
   }
 
+  // 切换常驻/按需
+  const toggleSkillResident = async (s: Skill, checked: boolean) => {
+    try {
+      const newConfig = { ...(s.config || {}), is_resident: checked }
+      await skillApi.update(pid, s.id, { config: newConfig })
+      refreshSkills()
+    } catch {
+      antdMessage.error('保存失败')
+    }
+  }
+
   // ZIP 导入
   const handleImport = async (file: File) => {
     if (!pid) return false
@@ -351,24 +362,33 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
                   key={s.id}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '8px 12px', background: '#fafafa', borderRadius: 8,
-                    border: '1px solid #f0f0f0',
+                    padding: '10px 12px', background: '#fafafa', borderRadius: 8,
+                    border: '1px solid #f0f0f0', gap: 12,
                   }}
                 >
-                  <Space>
-                    <span style={{ fontSize: 18 }}>{s.icon}</span>
-                    <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                    <span style={{ fontSize: 18, flexShrink: 0 }}>{s.icon}</span>
+                    <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 500 }}>{s.name}</div>
                       <div style={{ fontSize: 12, color: '#98A2B3' }}>
                         {s.description || s.source}
                         {s.call_count > 0 && ` · 调用 ${s.call_count} 次`}
                       </div>
                     </div>
-                    {s.is_public && <Tag color="purple" style={{ margin: 0 }}>市场</Tag>}
-                    {s.is_builtin && <Tag color="blue" style={{ margin: 0 }}>内置</Tag>}
-                    {s.source === 'imported' && <Tag color="green" style={{ margin: 0 }}>导入</Tag>}
-                  </Space>
-                  <Space size={4}>
+                    {s.is_public && <Tag color="purple" style={{ margin: 0, flexShrink: 0 }}>市场</Tag>}
+                    {s.is_builtin && <Tag color="blue" style={{ margin: 0, flexShrink: 0 }}>内置</Tag>}
+                    {s.source === 'imported' && <Tag color="green" style={{ margin: 0, flexShrink: 0 }}>导入</Tag>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: '#98A2B3' }}>
+                      {s.config?.is_resident !== false ? '常驻' : '按需'}
+                    </span>
+                    <Switch
+                      size="small"
+                      checked={s.config?.is_resident !== false}
+                      onChange={(checked) => toggleSkillResident(s, checked)}
+                    />
+                    <span style={{ color: '#e5e5e5', margin: '0 2px' }}>|</span>
                     <Tooltip title="编辑">
                       <Button
                         type="text" size="small" icon={<EditOutlined />}
@@ -381,7 +401,7 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
                         onClick={() => deleteSkill(s)}
                       />
                     </Tooltip>
-                  </Space>
+                  </div>
                 </div>
               ))}
             </div>

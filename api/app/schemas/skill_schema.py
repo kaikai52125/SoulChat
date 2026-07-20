@@ -9,11 +9,21 @@ class FewShot(BaseModel):
     output: str = Field(default="", max_length=4000)
 
 
+class SkillToolDef(BaseModel):
+    """脚本工具定义。"""
+
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=256)
+    script: str = Field(default="", max_length=256)
+
+
 class SkillConfig(BaseModel):
     """技能轻量配置（存 config JSONB）。"""
 
     quick_prompts: list[str] = Field(default_factory=list)
     few_shots: list[FewShot] = Field(default_factory=list)
+    is_resident: bool = Field(default=True)
+    tools: list[SkillToolDef] = Field(default_factory=list)
 
 
 class SkillCreate(BaseModel):

@@ -131,6 +131,12 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _skill_is_resident(skill) -> bool:
+    """判断 Skill 是否为常驻模式。默认 True（向后兼容）。"""
+    config = skill.config or {}
+    return config.get("is_resident", True)
+
+
 class ChatService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -733,10 +739,14 @@ class ChatService:
             if not replaced:
                 active_skills = [override_skill]
 
+        # ── 常驻/按需分流 ──
+        resident_skills = [s for s in active_skills if _skill_is_resident(s)]
+        on_demand_skills = [s for s in active_skills if not _skill_is_resident(s)]
+
         model, config = await build_default_chat_model(
             self.session, user_id, temperature=temperature, streaming=True
         )
-        base_prompt = self._compose_system_prompt(persona, active_skills)
+        base_prompt = self._compose_system_prompt(persona, resident_skills)
         # 注入已解锁特质提示词
         if persona is not None:
             trait_instr = await self._get_trait_instructions(persona.id, user_id)
@@ -809,13 +819,14 @@ class ChatService:
             )
 
         # ── 动态工具发现（v0.6）：核心工具直接注入，扩展工具按需发现 ──
-        # 检查是否存在扩展工具（MCP Server 或 Skill 脚本）
+        # 检查是否存在扩展工具（MCP Server 或常驻 Skill 脚本）
         has_extended_tools = bool(
             (persona and persona.enable_mcp)
             or agent_callable_personas
+            or on_demand_skills
             or any(
                 s.storage_path and s.config.get("tools")
-                for s in active_skills
+                for s in resident_skills
             )
         )
 
@@ -826,11 +837,11 @@ class ChatService:
             agent_callable_personas=agent_callable_personas,
         )
 
-        # 技能工具白名单叠加（取并集限制——所有技能的白名单取交集？不，应该是任一技能允许的工具就允许）
+        # 技能工具白名单：仅由常驻 Skill 贡献，按需 Skill 的 tool_keys 不作为过滤器
         skill_tool_keys: list[str] | None = None
-        if active_skills:
+        if resident_skills:
             all_tool_keys: set[str] = set()
-            for s in active_skills:
+            for s in resident_skills:
                 if s.tool_keys:
                     all_tool_keys.update(s.tool_keys)
             if all_tool_keys:
@@ -844,8 +855,8 @@ class ChatService:
         if skill_tool_keys and tools:
             tools = [t for t in tools if t.name in skill_tool_keys]
 
-        # 附加技能脚本工具（仍注入，同时计算 embedding 供 tool_search 发现）
-        for s in active_skills:
+        # 附加常驻技能脚本工具（仍注入，同时计算 embedding 供 tool_search 发现）
+        for s in resident_skills:
             if s.storage_path and s.config.get("tools"):
                 try:
                     from app.core.agent.tools.skill_executor import build_skill_tools
@@ -918,6 +929,15 @@ class ChatService:
                 )
             if hints:
                 system_prompt = (system_prompt + "\n\n" + "\n".join(hints)).strip()
+        # 当存在按需 Skill 时，追加 skill_load 使用提示
+        if on_demand_skills:
+            names = "、".join(s.name for s in on_demand_skills)
+            on_demand_hint = (
+                f"以下技能当前未激活，需要时可调用 skill_load 工具按需加载：{names}。"
+                f"加载后你会获得该技能的详细说明和可用脚本，"
+                f"再使用 bash 工具执行相关脚本完成任务。"
+            )
+            system_prompt = (system_prompt + "\n\n" + on_demand_hint).strip()
         # 有工具时追加并行策略提示：鼓励 Agent 对独立工具调用在同一轮并行发出
         if tools:
             parallel_hint = (

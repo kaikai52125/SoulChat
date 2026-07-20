@@ -11,9 +11,17 @@ export interface FewShot {
   output: string
 }
 
+export interface SkillToolDef {
+  name: string
+  description: string
+  script: string
+}
+
 export interface SkillConfig {
   quick_prompts?: string[]
   few_shots?: FewShot[]
+  is_resident?: boolean
+  tools?: SkillToolDef[]
 }
 
 export interface Skill {
