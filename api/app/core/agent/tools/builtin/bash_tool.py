@@ -170,26 +170,23 @@ async def _find_skill_dir(
         if persona is None:
             return None
 
+        from app.services.skill_service import SKILL_STORAGE_ROOT
         skills = await SkillRepository(session).list_by_persona(persona.id)
         for sk in skills:
             sp = sk.storage_path
             if not sp:
                 continue
-            # storage_path 可能是相对路径 (./storage/skills/{id}) 或绝对路径
-            sp = sp.lstrip("./").replace("/", os.sep).replace("\\", os.sep)
-            if not os.path.isabs(sp):
-                # 相对于项目根目录
-                from app.services.skill_service import SKILL_STORAGE_ROOT
-                skill_dir = os.path.join(SKILL_STORAGE_ROOT, os.path.basename(sp) if os.sep not in sp else sp.split("skills" + os.sep, 1)[-1] if "skills" + os.sep in sp else sp)
-            else:
-                skill_dir = sp
-
+            # storage_path 存的是相对路径 (./storage/skills/{id})
+            # 用 os.path.realpath 统一解析为绝对路径
+            if sp.startswith("./"):
+                sp = sp[2:]
+            skill_dir = os.path.realpath(os.path.join(SKILL_STORAGE_ROOT, os.path.basename(sp)))
             if not os.path.isdir(skill_dir):
                 continue
 
-            candidate = os.path.join(skill_dir, script_rel.replace("/", os.sep))
+            candidate = os.path.join(skill_dir, script_rel)
             if os.path.isfile(candidate):
-                return os.path.realpath(skill_dir)
+                return skill_dir
     except Exception as e:
         logger.warning("查找 Skill 目录失败（忽略）: %s", e)
 

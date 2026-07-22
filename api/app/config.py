@@ -1,6 +1,8 @@
 """应用配置：全部从环境变量 / .env 读取，不硬编码。"""
 from functools import lru_cache
+from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -185,6 +187,13 @@ class Settings(BaseSettings):
     tracing_flush_interval: float = 2.0
     # 内存队列上限(达到上限丢弃最旧 span 并 warning,保护进程内存)
     tracing_queue_maxsize: int = 5000
+
+    @model_validator(mode="after")
+    def _resolve_storage_paths(self):
+        """将相对路径解析为绝对路径，消除 CWD 依赖。"""
+        self.storage_dir = str(Path(self.storage_dir).resolve())
+        self.log_file_path = str(Path(self.log_file_path).resolve())
+        return self
 
     @property
     def database_url(self) -> str:
