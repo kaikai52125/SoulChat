@@ -195,7 +195,6 @@ class GroupChatService:
                     "memory_text": persona.memory_text or "",
                     "temperature": persona.temperature,
                     "avatar_url": avatar_url,
-                    "skill_ids": list(persona.skill_ids or []),
                     "enable_knowledge": persona.enable_knowledge,
                     "enable_memory": persona.enable_memory,
                     "enable_web_search": persona.enable_web_search,
@@ -1173,109 +1172,6 @@ class GroupChatService:
             except Exception as e:
                 logger.warning("群聊读取/压缩图片失败（跳过）: %s", e)
         return parts
-
-    async def _augment_member_skills(self, member: dict, owner_id: uuid.UUID) -> None:
-        """为群聊成员加载 Skill，结果写入 member dict（_skill_prompt, _skill_tools, _skill_tool_keys）。"""
-        member["_skill_prompt"] = ""
-        member["_skill_tools"] = []
-        member["_skill_tool_keys"] = []
-
-        try:
-            from app.repositories.skill_repository import SkillRepository
-            persona_id = uuid.UUID(member["id"])
-            all_skills = [
-                s for s in await SkillRepository(self.session).list_by_persona(persona_id)
-                if s.enabled
-            ]
-        except Exception:
-            return
-
-        if not all_skills:
-            return
-
-        resident = [s for s in all_skills if (s.config or {}).get("is_resident", True)]
-        on_demand = [s for s in all_skills if not (s.config or {}).get("is_resident", True)]
-
-        # 常驻 Skill prompt
-        prompts = []
-        tool_keys_set: set[str] = set()
-        script_tools = []
-        for sk in resident:
-            p = (sk.prompt or "").strip()
-            if p:
-                prompts.append(f"【当前任务能力：{sk.name}】\n{p}")
-            if sk.tool_keys:
-                tool_keys_set.update(sk.tool_keys)
-            if sk.storage_path and sk.config.get("tools"):
-                try:
-                    from app.core.agent.tools.skill_executor import build_skill_tools
-                    st = build_skill_tools(
-                        skill_id=sk.id, skill_config=sk.config,
-                        skill_dir=sk.storage_path, record_call=None,
-                        session=self.session, user_id=owner_id,
-                    )
-                    script_tools.extend(st)
-                except Exception as e:
-                    logger.warning("群聊 Skill 脚本工具构建失败: %s err=%s", sk.name, e)
-
-        member["_skill_prompt"] = "\n".join(prompts) if prompts else ""
-        member["_skill_tools"] = script_tools
-        member["_skill_tool_keys"] = list(tool_keys_set) if tool_keys_set else []
-
-        # 按需 Skill 提示
-        if on_demand:
-            lines = ["【可按需加载的技能】使用时调用 skill_load 工具加载："]
-            for s in on_demand:
-                desc = (s.description or "").strip()
-                meta = s.name
-                if desc:
-                    meta += f"：{desc}"
-                script_names = []
-                for td in (s.config or {}).get("tools") or []:
-                    if isinstance(td, dict) and td.get("name"):
-                        script_names.append(td["name"])
-                if script_names:
-                    meta += f"（可用脚本：{', '.join(script_names)}）"
-                if s.tool_keys:
-                    meta += f"（建议工具：{', '.join(s.tool_keys)}）"
-                lines.append(f"  • {meta}")
-            on_demand_prompt = "\n".join(lines)
-            member["_skill_prompt"] = (
-                member["_skill_prompt"] + "\n\n" + on_demand_prompt
-                if member["_skill_prompt"]
-                else on_demand_prompt
-            )
-
-    async def _build_member_tools(self, member: dict, owner_id: uuid.UUID) -> list:
-        """按单个角色配置构建工具列表。"""
-        if not any([
-            member.get("enable_knowledge"),
-            member.get("enable_memory"),
-            member.get("enable_web_search"),
-        ]):
-            return []
-        try:
-            from app.core.agent.tools import build_enabled_tools
-
-            overrides = {
-                "knowledge_search": bool(member.get("enable_knowledge")),
-                "memory_search": bool(member.get("enable_memory")),
-                "web_search": bool(member.get("enable_web_search")),
-            }
-            kb_ids = member.get("kb_ids") or None
-            return await build_enabled_tools(
-                self.session,
-                owner_id,
-                self._tool_citations,
-                overrides=overrides,
-                stats_holder=self._tool_stats,
-                kb_ids=kb_ids,
-                enable_mcp=bool(member.get("enable_mcp")),
-                mcp_server_ids=[str(s) for s in (member.get("mcp_server_ids") or [])] if member.get("mcp_server_ids") else None,
-            )
-        except Exception as e:
-            logger.warning("角色 %s 工具构建失败（降级纯对话）: %s", member.get("name"), e)
-            return []
 
     async def _speak(
         self,

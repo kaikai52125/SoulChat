@@ -132,10 +132,11 @@ def _sse(event: str, data: dict) -> str:
 
 
 def _skill_is_resident(skill) -> bool:
-    """判断 Skill 是否为常驻模式。默认 True（向后兼容）。"""
+    """判断 Skill 是否为常驻模式。默认 True（向后兼容）。
+    保留供 chat_service 内部引用，实际逻辑已统一到 persona_agent.py。
+    """
     config = skill.config or {}
     return config.get("is_resident", True)
-
 
 class ChatService:
     def __init__(self, session: AsyncSession):
@@ -714,39 +715,18 @@ class ChatService:
         persona = await self.persona_repo.get_active(user_id)
         temperature = persona.temperature if persona else 0.7
 
-        # 组装技能列表：角色下所有 enabled=true 的技能自动挂载
-        auto_skills: list = []
+        # ── 构建完整角色 Agent（与群聊共用 build_persona_agent）──
+        from app.core.agent.persona_agent import build_persona_agent as _bpa
+        _persona_agent = None
         if persona:
-            all_skills = await self.skill_repo.list_by_persona(persona.id)
-            auto_skills = [s for s in all_skills if s.enabled]
-        # 对话临时覆盖：body.skill_id 如果传了，替换同 id 的自动挂载技能，否则只启用这一个
-        override_skill = None
-        if body.skill_id and persona:
-            try:
-                override_skill = await self.skill_repo.get(
-                    persona.id, uuid.UUID(str(body.skill_id))
-                )
-            except (ValueError, TypeError):
-                pass
-        active_skills = list(auto_skills)
-        if override_skill is not None:
-            replaced = False
-            for i, s in enumerate(active_skills):
-                if s.id == override_skill.id:
-                    active_skills[i] = override_skill
-                    replaced = True
-                    break
-            if not replaced:
-                active_skills = [override_skill]
-
-        # ── 常驻/按需分流 ──
-        resident_skills = [s for s in active_skills if _skill_is_resident(s)]
-        on_demand_skills = [s for s in active_skills if not _skill_is_resident(s)]
+            _persona_agent = await _bpa(self.session, persona.id, user_id)
 
         model, config = await build_default_chat_model(
             self.session, user_id, temperature=temperature, streaming=True
         )
-        base_prompt = self._compose_system_prompt(persona, resident_skills)
+
+        # 以 build_persona_agent 的 system_prompt 为基础，叠加单聊专属层
+        base_prompt = _persona_agent.system_prompt if _persona_agent else ""
         # 注入已解锁特质提示词
         if persona is not None:
             trait_instr = await self._get_trait_instructions(persona.id, user_id)
@@ -818,79 +798,45 @@ class ChatService:
                 user_id, exclude_id=persona.id
             )
 
-        # ── 动态工具发现（v0.6）：核心工具直接注入，扩展工具按需发现 ──
-        # 检查是否存在扩展工具（MCP Server 或常驻 Skill 脚本）
+        # ── 工具集：基于 build_persona_agent，叠加请求级覆盖 ──
         has_extended_tools = bool(
             (persona and persona.enable_mcp)
             or agent_callable_personas
-            or on_demand_skills
-            or any(
-                s.storage_path and s.config.get("tools")
-                for s in resident_skills
-            )
         )
-
-        # 分层模式：layered=True 只加载 core 层内置工具，MCP 等扩展工具通过 tool_search 发现
-        tools = await build_enabled_tools(
-            self.session, user_id, citations, overrides, stats_holder, kb_ids,
-            layered=True,
-            agent_callable_personas=agent_callable_personas,
-        )
-
-        # 技能工具白名单：仅由常驻 Skill 贡献，按需 Skill 的 tool_keys 不作为过滤器
-        skill_tool_keys: list[str] | None = None
-        if resident_skills:
-            all_tool_keys: set[str] = set()
-            for s in resident_skills:
-                if s.tool_keys:
-                    all_tool_keys.update(s.tool_keys)
-            if all_tool_keys:
-                skill_tool_keys = list(all_tool_keys)
 
         # 注入当前 persona_id 供 save_to_persona_memory 工具使用
         from app.core.agent.tools.builtin.persona_memory import set_current_persona
         set_current_persona(str(persona.id) if persona else None)
 
-        # 技能白名单过滤（基于第一次构建的工具列表）
-        if skill_tool_keys and tools:
-            tools = [t for t in tools if t.name in skill_tool_keys]
+        # 以 build_persona_agent 的工具为基础
+        tools = list(_persona_agent.tools) if _persona_agent else []
+        if not tools:
+            tools = await build_enabled_tools(
+                self.session, user_id, citations, overrides, stats_holder, kb_ids,
+                layered=True,
+            )
 
-        # 附加常驻技能脚本工具（仍注入，同时计算 embedding 供 tool_search 发现）
-        for s in resident_skills:
-            if s.storage_path and s.config.get("tools"):
-                try:
-                    from app.core.agent.tools.skill_executor import build_skill_tools
-                    import asyncio as _asyncio
-
-                    # 技能调用计数：fire-and-forget，不阻塞工具执行
-                    def _bump(sid):
-                        try:
-                            loop = _asyncio.get_event_loop()
-                            if loop.is_running():
-                                loop.create_task(_bump_async(sid))
-                        except Exception:
-                            pass
-
-                    async def _bump_async(sid):
-                        try:
-                            from app.db.postgres import SessionLocal
-                            from app.repositories.skill_repository import SkillRepository
-                            async with SessionLocal() as s2:
-                                await SkillRepository(s2).bump_call_count(sid)
-                        except Exception:
-                            pass
-
-                    st = build_skill_tools(
-                        skill_id=s.id,
-                        skill_config=s.config,
-                        skill_dir=s.storage_path,
-                        record_call=_bump,
-                        session=self.session,
-                        user_id=user_id,
-                    )
-                    tools.extend(st)
-                except Exception as e:
-                    logger.warning("构建技能工具失败: skill=%s err=%s", s.id, e)
+        # 请求级工具覆盖（body.enable_* 开关覆盖 persona 配置）
+        has_body_override = (
+            body.enable_knowledge is not None
+            or body.enable_memory is not None
+            or body.enable_web_search is not None
+        )
+        if has_body_override:
+            # 用覆盖值重建工具，再重新挂载 skill 工具
+            _override_name = {
+                "knowledge_search": "enable_knowledge",
+                "memory_search": "enable_memory",
+                "web_search": "enable_web_search",
+            }
+            _rebuilt = await build_enabled_tools(
+                self.session, user_id, citations, overrides, stats_holder, kb_ids,
+                layered=True,
+            )
+            # 保留来自 agent 的 skill 工具
+            _skill_names = {t.name for t in tools if t.name.startswith("skill__")}
+            _core_names = {t.name for t in _rebuilt}
+            tools = [t for t in _rebuilt] + [t for t in tools if t.name in _skill_names and t.name not in _core_names]
 
         # ── Agent-as-Tool：直接将可调用角色挂进工具列表（不走 tool_search 间接发现）──
         agent_tool_names: list[str] = []
@@ -929,34 +875,6 @@ class ChatService:
                 )
             if hints:
                 system_prompt = (system_prompt + "\n\n" + "\n".join(hints)).strip()
-        # 当存在按需 Skill 时，追加 skill_load 使用提示（含元数据）
-        if on_demand_skills:
-            lines = ["【可按需加载的技能】使用时调用 skill_load 工具加载："]
-            for s in on_demand_skills:
-                desc = (s.description or "").strip()
-                script_names: list[str] = []
-                tools_def = (s.config or {}).get("tools") or []
-                if isinstance(tools_def, list):
-                    for td in tools_def:
-                        if isinstance(td, dict) and td.get("name"):
-                            script_names.append(td["name"])
-                meta = s.name
-                if desc:
-                    meta += f"：{desc}"
-                if script_names:
-                    meta += f"（可用脚本：{', '.join(script_names)}）"
-                if s.tool_keys:
-                    meta += f"（建议内置工具：{', '.join(s.tool_keys)}）"
-                lines.append(f"  • {meta}")
-            system_prompt = (system_prompt + "\n\n" + "\n".join(lines)).strip()
-        # 有工具时追加并行策略提示：鼓励 Agent 对独立工具调用在同一轮并行发出
-        if tools:
-            parallel_hint = (
-                "当你面对需要多步检索或对比分析的复杂问题时，请先在脑中规划需要哪些信息，"
-                "然后在同一轮中同时调用多个互相独立的工具（系统会并行执行），"
-                "最后基于所有结果综合回答。不要一步步串行调用可以并行的工具。"
-            )
-            system_prompt = (system_prompt + "\n\n" + parallel_hint).strip()
         if settings.two_speed_enabled and supports_function_call(config):
             # Router 路径：轻量分类 → chat 不挂工具 / tool 挂工具
             lc_messages = []
