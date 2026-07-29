@@ -201,7 +201,7 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         results = {}
         async for ev in orchestrator.execute_stream(plan, bb, members):
-            results[ev["subtask_id"]] = ev.get("status", "ok")
+            if ev["type"] == "subtask_done": results[ev["subtask_id"]] = ev.get("status", "ok")
 
         self.assertEqual(len(results), 3)
         self.assertIn("a", results)
@@ -237,7 +237,7 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         results = {}
         async for ev in orchestrator.execute_stream(plan, bb, members):
-            results[ev["subtask_id"]] = ev.get("status", "ok")
+            if ev["type"] == "subtask_done": results[ev["subtask_id"]] = ev.get("status", "ok")
         self.assertEqual(len(results), 3)
 
     # ------------------------------------------------------------------
@@ -278,7 +278,7 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         results = {}
         async for ev in orchestrator.execute_stream(plan, bb, members):
-            results[ev["subtask_id"]] = ev.get("status", "ok")
+            if ev["type"] == "subtask_done": results[ev["subtask_id"]] = ev.get("status", "ok")
 
         self.assertEqual(len(results), 2)
         self.assertIn("a", results)

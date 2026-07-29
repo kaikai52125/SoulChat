@@ -66,6 +66,7 @@ interface GroupToolRun {
   tool: string
   query?: string
   status?: string
+  latencyMs?: number
 }
 
 // 工具 chip 去重：同一工具多次调用合并成一个（带 ×次数），running 状态合并保留，
@@ -105,6 +106,7 @@ interface GroupUiMessage {
     persona: string
     desc: string
     status: 'pending' | 'running' | 'done' | 'error'
+    toolRuns?: GroupToolRun[]
   }>
 }
 
@@ -332,6 +334,9 @@ export default function GroupChatPage() {
   const streamingRef = useRef<string | null>(null)
   // 已渲染过的真人消息 id 集合（say 乐观插入与 SSE 回声去重）
   const seenHumanRef = useRef<Set<string>>(new Set())
+  // Token 节流：积攒到一帧再批量 setMessages
+  const tokenBufRef = useRef<Record<string, string>>({})
+  const tokenRafRef = useRef<number>(0)
 
   // @ 提及下拉：是否显示 + 过滤关键字 + 高亮项
   const [mentionOpen, setMentionOpen] = useState(false)
@@ -412,16 +417,23 @@ export default function GroupChatPage() {
       .map((p) => ({ name: p.name, avatar_url: p.avatar_url }))
   }
 
+  const scrollRAF = useRef<number>(0)
   useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [messages, thinking])
+    if (scrollRAF.current) return
+    scrollRAF.current = requestAnimationFrame(() => {
+      scrollRAF.current = 0
+      const el = scrollRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  }, [messages.length, thinking])
 
   const openConversation = async (id: string) => {
     // 断开旧订阅
     subRef.current?.abort()
     streamingRef.current = null
     seenHumanRef.current = new Set()
+    if (tokenRafRef.current) { cancelAnimationFrame(tokenRafRef.current); tokenRafRef.current = 0 }
+    tokenBufRef.current = {}
     setThinking(false)
     setActiveId(id)
     setListOpen(false)
@@ -541,9 +553,26 @@ export default function GroupChatPage() {
       onToken: (d: { text: string }) => {
         const cur = streamingRef.current
         if (!cur) return
-        setMessages((prev) =>
-          prev.map((m) => (m.id === cur ? { ...m, content: m.content + d.text } : m)),
-        )
+        if (!tokenBufRef.current[cur]) tokenBufRef.current[cur] = ''
+        tokenBufRef.current[cur] += d.text
+        if (!tokenRafRef.current) {
+          tokenRafRef.current = requestAnimationFrame(() => {
+            const buf = { ...tokenBufRef.current }
+            tokenBufRef.current = {}
+            tokenRafRef.current = 0
+            // 如果 streamingRef 已被清空（speaker_end 已处理），跳过
+            if (!streamingRef.current && Object.keys(buf).length === 0) return
+            setMessages((prev) => {
+              let changed = false
+              const next = prev.map((m) => {
+                const add = buf[m.id]
+                if (add) { changed = true; return { ...m, content: m.content + add } }
+                return m
+              })
+              return changed ? next : prev
+            })
+          })
+        }
       },
       onToolStart: (d: { tool: string; query: string }) => {
         const cur = streamingRef.current
@@ -581,22 +610,26 @@ export default function GroupChatPage() {
       },
       onSpeakerEnd: (d: { message_id: string }) => {
         const cur = streamingRef.current
+        // 先把积攒的 token 刷进去（ID 尚未变更，还能匹配到）
+        if (tokenRafRef.current) { cancelAnimationFrame(tokenRafRef.current); tokenRafRef.current = 0 }
+        const pending = (cur && tokenBufRef.current[cur]) ? tokenBufRef.current[cur] : ''
+        tokenBufRef.current = {}
         setMessages((prev) =>
           prev.map((m) =>
             m.id === cur
-              ? { ...m, id: d.message_id, streaming: false, createdAt: new Date().toISOString() }
+              ? { ...m, id: d.message_id, streaming: false, content: m.content + pending, createdAt: new Date().toISOString() }
               : m,
           ),
         )
         streamingRef.current = null
       },
       onTaskPlan: (d) => {
-        // 单条"实时状态卡片"，后续 onSubtaskDone 更新它
         const steps = d.subtasks.map((s) => ({
           id: s.id,
           persona: s.assigned_persona,
           desc: s.description,
-          status: 'pending' as 'pending' | 'running' | 'done' | 'error',
+          status: 'running' as const,
+          toolRuns: [] as GroupToolRun[],
         }))
         const planId = `plan-${Date.now()}`
         const card: GroupUiMessage = {
@@ -609,17 +642,9 @@ export default function GroupChatPage() {
           taskSteps: steps,
         } as GroupUiMessage
         setMessages((prev) => [...prev, card])
-        // 马上把所有 subtask 标记为 running
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === planId
-              ? { ...m, taskSteps: m.taskSteps?.map((s) => ({ ...s, status: 'running' as const })) }
-              : m,
-          ),
-        )
       },
       onSubtaskStart: (_d) => {
-        // 不做单独消息，状态已在 onTaskPlan 中标记为 running
+        // 状态已在 onTaskPlan 中标记为 running，此处不再处理
       },
       onTaskOutput: (d) => {
         // 直接插入完整消息（不走流式通道，无竞态）
@@ -651,7 +676,45 @@ export default function GroupChatPage() {
           }),
         )
       },
+      onSubtaskToolStart: (d) => {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (!m.isTaskPlan || !m.taskSteps) return m
+            return {
+              ...m,
+              taskSteps: m.taskSteps.map((s) =>
+                s.id === d.subtask_id
+                  ? { ...s, toolRuns: [...(s.toolRuns || []), { tool: d.tool, query: d.query, status: 'running' }] }
+                  : s,
+              ),
+            }
+          }),
+        )
+      },
+      onSubtaskToolResult: (d) => {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (!m.isTaskPlan || !m.taskSteps) return m
+            return {
+              ...m,
+              taskSteps: m.taskSteps.map((s) => {
+                if (s.id !== d.subtask_id) return s
+                const runs = [...(s.toolRuns || [])]
+                for (let i = runs.length - 1; i >= 0; i--) {
+                  if (runs[i].tool === d.tool && runs[i].status === 'running') {
+                    runs[i] = { ...runs[i], status: d.status || 'success', latencyMs: d.latency_ms }
+                    break
+                  }
+                }
+                return { ...s, toolRuns: runs }
+              }),
+            }
+          }),
+        )
+      },
       onDone: () => {
+        if (tokenRafRef.current) { cancelAnimationFrame(tokenRafRef.current); tokenRafRef.current = 0 }
+        tokenBufRef.current = {}
         setThinking(false)
         // 清除任务计划卡片（在消息列表中移除 isTaskPlan 消息）
         setMessages((prev) => prev.filter((m) => !m.isTaskPlan))
@@ -1264,25 +1327,75 @@ export default function GroupChatPage() {
               const name = m.senderName || member?.name || 'AI'
               // ── 任务协作状态卡片 ──
               if (m.isTaskPlan && m.taskSteps) {
+                const doneCount = m.taskSteps.filter((s) => s.status === 'done').length
+                const totalCount = m.taskSteps.length
+                const allDone = doneCount === totalCount
                 return (
                   <div key={m.id} style={{ margin: '12px 0', display: 'flex', justifyContent: 'center' }}>
                     <div style={{
-                      background: '#f6f8fa', borderRadius: 10, border: '1px solid #d0d7de',
-                      padding: '14px 18px', maxWidth: 480, width: '100%',
+                      background: allDone ? '#f0faf3' : '#f6f8fa',
+                      borderRadius: 10,
+                      border: '1px solid ' + (allDone ? '#b6e3c3' : '#d0d7de'),
+                      padding: '14px 18px', maxWidth: 560, width: '100%',
+                      maxHeight: 420, overflowY: 'auto',
                     }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#1a7f37', marginBottom: 10 }}>
-                        🎯 任务协作中
+                      <div style={{ fontSize: 13, fontWeight: 600, color: allDone ? '#1a7f37' : '#0969da', marginBottom: 8 }}>
+                        🎯 任务协作{allDone ? ' · 全部完成' : `中 (${doneCount}/${totalCount})`}
                       </div>
                       {m.taskSteps.map((s) => {
                         const icon = s.status === 'done' ? '✅' : s.status === 'running' ? '⏳' : s.status === 'error' ? '❌' : '⬜'
+                        const tr = s.toolRuns
+                        const hasTools = tr && tr.length > 0
+                        const runningTools = tr?.filter((t) => t.status === 'running').length || 0
                         return (
                           <div key={s.id} style={{
-                            fontSize: 13, padding: '4px 0',
+                            fontSize: 13, padding: '6px 0',
                             color: s.status === 'running' ? '#0969da' : s.status === 'done' ? '#1a7f37' : '#656d76',
-                            opacity: s.status === 'pending' ? 0.6 : 1,
+                            borderBottom: '1px solid #e8eaed',
                           }}>
-                            {icon} <strong>{s.persona}</strong>
-                            <span style={{ marginLeft: 6, color: '#656d76', fontSize: 12 }}>{s.desc.slice(0, 60)}{s.desc.length > 60 ? '…' : ''}</span>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                              {icon} <strong>{s.persona}</strong>
+                              {runningTools > 0 && (
+                                <span style={{ fontSize: 11, color: '#0969da', fontWeight: 500 }}>
+                                  · {runningTools} 个工具运行中
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ marginLeft: 18, color: '#57606a', fontSize: 12, marginBottom: hasTools ? 4 : 0 }}>
+                              {s.desc.length > 80 ? s.desc.slice(0, 80) + '…' : s.desc}
+                            </div>
+                            {hasTools && (
+                              <div style={{ marginLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                {dedupToolRuns(tr).map((r, j) => {
+                                  const meta = resolveToolMeta(r.tool)
+                                  const q = tr?.find((t) => t.tool === r.tool)?.query || ''
+                                  const queryShort = q.length > 40 ? q.slice(0, 40) + '…' : q
+                                  const lat = tr?.find((t) => t.tool === r.tool && t.status !== 'running')?.latencyMs
+                                  return (
+                                    <div key={j} style={{
+                                      fontSize: 11, padding: '2px 6px', borderRadius: 4,
+                                      background: r.running ? '#ddf4ff' : '#f6f8fa',
+                                      border: '1px solid ' + (r.running ? '#54aeff' : '#d0d7de'),
+                                      display: 'flex', alignItems: 'center', gap: 4,
+                                    }}>
+                                      <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                        {meta.icon} {meta.short}{r.count > 1 ? ` ×${r.count}` : ''}
+                                      </span>
+                                      {queryShort && (
+                                        <span style={{ color: '#57606a', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10 }}>
+                                          {queryShort}
+                                        </span>
+                                      )}
+                                      {r.running ? (
+                                        <span style={{ color: '#0969da', fontSize: 10, whiteSpace: 'nowrap' }}>…</span>
+                                      ) : lat !== undefined ? (
+                                        <span style={{ color: '#8b949e', fontSize: 10, whiteSpace: 'nowrap' }}>{(lat / 1000).toFixed(1)}s</span>
+                                      ) : null}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
                           </div>
                         )
                       })}

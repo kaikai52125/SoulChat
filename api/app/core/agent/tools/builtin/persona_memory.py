@@ -19,6 +19,11 @@ def set_current_persona(persona_id: str | None) -> None:
     _current_persona_id.set(persona_id)
 
 
+def get_current_persona_id() -> str | None:
+    """获取当前上下文中正在运行的角色 ID（可能为 None）。"""
+    return _current_persona_id.get()
+
+
 class _PersonaMemoryInput(BaseModel):
     content: str = Field(default="", description="要记住的内容。尽量简洁，只保留关键事实。")
     query: str = Field(default="", description="要记住的内容（与 content 等效）")

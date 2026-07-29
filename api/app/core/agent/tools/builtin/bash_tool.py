@@ -161,12 +161,17 @@ def _is_within(parent: str, child: str) -> bool:
 async def _find_skill_dir(
     script_rel: str, session, user_id: uuid.UUID
 ) -> str | None:
-    """在当前活跃角色的所有 Skill（常驻+按需）中查找脚本所属目录。"""
+    """查找脚本所属目录：优先用上下文中的角色 ID，否则用活跃角色。"""
     from app.repositories.agent_persona_repository import AgentPersonaRepository
     from app.repositories.skill_repository import SkillRepository
+    from app.core.agent.tools.builtin.persona_memory import get_current_persona_id
 
     try:
-        persona = await AgentPersonaRepository(session).get_active(user_id)
+        cid = get_current_persona_id()
+        if cid:
+            persona = await AgentPersonaRepository(session).get(user_id, uuid.UUID(cid))
+        else:
+            persona = await AgentPersonaRepository(session).get_active(user_id)
         if persona is None:
             return None
 

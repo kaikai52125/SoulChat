@@ -2,7 +2,7 @@
 
 三个核心方法都是 Agent —— 通过 function calling 可调用 datetime/web_search 等工具：
 1. decompose()  — Agent 分解任务 → DAG（可查日期、搜信息）
-2. execute_stream() — 每个 subtask 角色也是 Agent（可调工具）
+2. execute_stream() — 每个 subtask 角色也是 Agent（可调工具），实时产出执行轨迹
 3. synthesize() — Agent 汇总黑板 finding → 最终报告
 
 与裸 LLM 调用的区别：Orchestrator 现在是真正的 Agent，
@@ -127,7 +127,14 @@ class TaskOrchestrator:
         self, plan: TaskPlan, blackboard: SharedBlackboard,
         group_members: list[dict[str, Any]],
     ) -> AsyncGenerator[dict, None]:
-        """并行执行子任务——每个 subtask 角色都是 Agent，可调工具。"""
+        """并行执行子任务——每个 subtask 角色都是 Agent，实时产出执行轨迹。
+
+        事件类型：
+        - subtask_start: Worker 开始执行
+        - subtask_tool_start: Worker 调了一个工具
+        - subtask_tool_result: 工具调用完成
+        - subtask_done: Worker 完成（含结果文本）
+        """
         t_exec_start = time.perf_counter()
         name_to_member = {m["name"]: m for m in group_members}
 
@@ -159,24 +166,35 @@ class TaskOrchestrator:
             if len(layer) > 1:
                 print(f"  || {len(layer)} 个子任务并行执行: {layer_ids}", flush=True)
 
-            async def _run_one(st: Subtask) -> dict | None:
+            # ── asyncio.Queue 汇聚并行 Worker 的事件 ──
+            events_q: asyncio.Queue[dict] = asyncio.Queue()
+
+            async def _run_one(st: Subtask) -> None:
                 t_start = time.perf_counter()
                 persona = name_to_member.get(st.assigned_persona)
                 if persona is None:
-                    return {
-                        "subtask_id": st.id, "persona": st.assigned_persona,
+                    await events_q.put({
+                        "type": "subtask_done", "subtask_id": st.id,
+                        "persona": st.assigned_persona,
                         "status": "error", "elapsed_ms": 0,
                         "error": f"未找到角色「{st.assigned_persona}」",
-                    }
+                    })
+
+                    return
 
                 print(f"  >> {st.id} ({st.assigned_persona}) 启动", flush=True)
+                await events_q.put({
+                    "type": "subtask_start",
+                    "subtask_id": st.id,
+                    "persona": st.assigned_persona,
+                })
 
                 # ── 构建该角色的完整 Agent（与单聊一致）──
                 try:
                     from app.core.agent.persona_agent import build_persona_agent
                     import uuid as _uuid
                     worker = await build_persona_agent(
-                        self.session, _uuid.UUID(persona["id"]), self.owner_id,
+                        self.session, _uuid.UUID(persona.get("id", "")), self.owner_id,
                     )
                     if worker is None:
                         raise ValueError(f"角色 {st.assigned_persona} 不存在")
@@ -187,13 +205,13 @@ class TaskOrchestrator:
                 except Exception as e:
                     logger.warning("构建 Worker Agent 失败: %s err=%s", st.assigned_persona, e)
                     print(f"[TASK-WORKER] {st.assigned_persona}: FALLBACK to orchestrator tools! err={e}", flush=True)
-                    # 降级：用 Orchestrator 的 model + tools，role 只有 system_prompt
                     worker_model = self.model
                     worker_tools = self.tools
                     worker_system_prompt = persona.get("system_prompt", "") or "你是一个助手。"
 
                 context = blackboard.get_context_for(st.assigned_persona)
                 task_prompt = (
+                    f"团队总目标：{plan.goal}\n\n"
                     f"你在协作任务中承担的角色：{st.description}\n\n"
                     f"预期产出：{st.expected_output}\n\n"
                     f"当前黑板内容：\n{context}"
@@ -203,40 +221,98 @@ class TaskOrchestrator:
                     SystemMessage(content=task_prompt),
                     HumanMessage(content=(
                         f"你的唯一任务是：「{st.description}」\n\n"
-                        f"重要：只完成上面这个任务，不要涉及其他领域或其他角色的工作。"
-                        f"如果有其他领域的信息需要补充，会有其他角色负责。"
-                        f"请聚焦输出你的发现或分析。"
+                        f"团队总目标是：「{plan.goal}」\n\n"
+                        f"重要规则：\n"
+                        f"1. 如果你的系统提示中包含操作步骤和脚本路径，必须使用 bash "
+                        f"工具按步骤执行脚本，不要跳过直接回答\n"
+                        f"2. 只完成上面这个任务，不要涉及其他领域或其他角色的工作\n"
+                        f"3. 如有其他领域的信息需要补充，会有其他角色负责\n"
+                        f"4. 请聚焦输出你的发现或分析"
                     )),
                 ]
 
+                # ── 工具回调：实时推送事件到队列 ──
+                def _on_tool_ev(ev: dict) -> None:
+                    events_q.put_nowait({
+                        "type": f"subtask_{ev['type']}",  # subtask_tool_start / subtask_tool_result
+                        "subtask_id": st.id,
+                        "persona": st.assigned_persona,
+                        "tool": ev.get("tool", "?"),
+                        "query": ev.get("query", ""),
+                        "status": ev.get("status"),
+                        "latency_ms": ev.get("latency_ms"),
+                    })
+
                 try:
-                    result_text = await asyncio.wait_for(
-                        self._run_agent(messages, model=worker_model, tools=worker_tools, label=f"Worker.{st.assigned_persona}"),
-                        timeout=_SUBTASK_TIMEOUT,
+                    # 切换上下文：让 Worker 的 skill_load/bash_tool 感知到当前角色
+                    from app.core.agent.tools.builtin.persona_memory import (
+                        set_current_persona, get_current_persona_id,
                     )
+                    prev_pid = get_current_persona_id()
+                    pid_str = persona.get("id")
+                    if pid_str is not None:
+                        set_current_persona(str(pid_str))
+                    try:
+                        result_text = await asyncio.wait_for(
+                            self._run_agent(
+                                messages, model=worker_model, tools=worker_tools,
+                                label=f"Worker.{st.assigned_persona}",
+                                tool_events=_on_tool_ev,
+                            ),
+                            timeout=_SUBTASK_TIMEOUT,
+                        )
+                    finally:
+                        set_current_persona(prev_pid)
                 except asyncio.TimeoutError:
                     result_text = "执行超时"
                     elapsed_ms = int((time.perf_counter() - t_start) * 1000)
                     blackboard.post(BlackboardEntry(type="finding", author=st.assigned_persona, content=result_text))
-                    return {"subtask_id": st.id, "persona": st.assigned_persona, "status": "error", "elapsed_ms": elapsed_ms, "error": "超时"}
+                    await events_q.put({
+                        "type": "subtask_done", "subtask_id": st.id,
+                        "persona": st.assigned_persona, "status": "error",
+                        "elapsed_ms": elapsed_ms, "error": "超时",
+                    })
+
+                    return
                 except Exception as e:
                     result_text = f"执行失败：{e}"
                     elapsed_ms = int((time.perf_counter() - t_start) * 1000)
                     blackboard.post(BlackboardEntry(type="finding", author=st.assigned_persona, content=result_text))
-                    return {"subtask_id": st.id, "persona": st.assigned_persona, "status": "error", "elapsed_ms": elapsed_ms, "error": str(e)}
+                    await events_q.put({
+                        "type": "subtask_done", "subtask_id": st.id,
+                        "persona": st.assigned_persona, "status": "error",
+                        "elapsed_ms": elapsed_ms, "error": str(e),
+                    })
+
+                    return
 
                 elapsed_ms = int((time.perf_counter() - t_start) * 1000)
                 print(f"  V {st.id} ({st.assigned_persona}) 完成 ({elapsed_ms}ms)", flush=True)
                 blackboard.post(BlackboardEntry(type="finding", author=st.assigned_persona, content=result_text))
                 results[st.id] = result_text
-                return {"subtask_id": st.id, "persona": st.assigned_persona, "status": "ok", "elapsed_ms": elapsed_ms}
+                await events_q.put({
+                    "type": "subtask_done", "subtask_id": st.id,
+                    "persona": st.assigned_persona, "status": "ok",
+                    "elapsed_ms": elapsed_ms,
+                })
+                done_count[0] += 1
 
-            tasks = [asyncio.ensure_future(_run_one(st)) for st in layer]
-            for coro in asyncio.as_completed(tasks):
-                event = await coro
-                if event:
-                    event["type"] = "subtask_done"
-                    yield event
+            # 启动所有 Worker（并行）
+            worker_tasks = [asyncio.ensure_future(_run_one(st)) for st in layer]
+
+            # 主循环：从队列取事件 yield，计数 subtask_done
+            done_count = 0
+            while done_count < len(layer):
+                try:
+                    ev = await asyncio.wait_for(events_q.get(), timeout=0.5)
+                    yield ev
+                    if ev["type"] == "subtask_done":
+                        done_count += 1
+                except asyncio.TimeoutError:
+                    pass
+
+            # 确保所有 task 完成（防御）
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
 
             t_layer_elapsed = time.perf_counter() - t_layer_start
             print(f"--- 层 {layer_idx + 1}/{len(layers)} 完成 ({t_layer_elapsed:.1f}s) ---", flush=True)
@@ -286,11 +362,16 @@ class TaskOrchestrator:
     async def _run_agent(
         self, messages: list, model: ChatOpenAI | None = None, tools: list | None = None,
         label: str = "Agent",
+        tool_events: object = None,
     ) -> str:
         """运行 function calling Agent，收集最终文本。
 
         decompose / synthesize / subtask 三个场景共用此方法。
         不传 model/tools 时用 self.model + self.tools（Orchestrator 自身）。
+
+        Args:
+            tool_events: 可选回调 callable(ev)，收到 tool_start/tool_result 时调用。
+                         用于 execute_stream 实时推送 Worker 的工具调用事件。
         """
         from app.core.agent.orchestrator import run_function_calling
 
@@ -303,10 +384,13 @@ class TaskOrchestrator:
                 collected = ev.get("text", "")  # final 是完整文本，替换而非追加
             elif ev["type"] == "token":
                 collected += ev.get("text", "")
-            elif ev["type"] == "tool_start":
-                tool = ev.get("tool", "?")
-                query = ev.get("query", "")[:60]
-                print(f"     [TOOL] [{label}] 调工具: {tool}({query})", flush=True)
+            elif ev["type"] in ("tool_start", "tool_result"):
+                if tool_events is not None:
+                    tool_events(ev)
+                elif ev["type"] == "tool_start":
+                    tool = ev.get("tool", "?")
+                    query = ev.get("query", "")[:60]
+                    print(f"     [TOOL] [{label}] 调工具: {tool}({query})", flush=True)
         return collected.strip()
 
     @staticmethod

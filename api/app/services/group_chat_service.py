@@ -683,7 +683,7 @@ class GroupChatService:
                 session=self.session,
                 owner_id=owner_id,
             ):
-                if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start"):
+                if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start", "subtask_tool_start", "subtask_tool_result"):
                     await bus.publish(cid, event["type"], event)
                 elif event["type"] == "token":
                     await bus.publish(cid, "token", {"text": event["text"]})
@@ -975,7 +975,7 @@ class GroupChatService:
                         session=self.session,
                         owner_id=user_id,
                     ):
-                        if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start"):
+                        if event["type"] in ("task_plan", "subtask_start", "subtask_done", "synthesize_start", "subtask_tool_start", "subtask_tool_result"):
                             # 将协作内部事件包装为 meta 事件
                             yield _sse(event["type"], event)
                         elif event["type"] == "token":

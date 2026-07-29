@@ -28,10 +28,18 @@ async def _build(ctx: ToolBuildContext) -> StructuredTool | None:
             return "错误：请提供技能名称"
 
         try:
+            # 优先使用上下文中的角色 ID（agent__ 调用时设置），
+            # 否则回退到活跃角色（单聊主角色直接调用时）
+            import uuid as _uuid
             from app.repositories.agent_persona_repository import AgentPersonaRepository
             from app.repositories.skill_repository import SkillRepository
+            from app.core.agent.tools.builtin.persona_memory import get_current_persona_id
 
-            persona = await AgentPersonaRepository(session).get_active(user_id)
+            cid = get_current_persona_id()
+            if cid:
+                persona = await AgentPersonaRepository(session).get(user_id, _uuid.UUID(cid))
+            else:
+                persona = await AgentPersonaRepository(session).get_active(user_id)
             if persona is None:
                 return "错误：未找到活跃角色"
 

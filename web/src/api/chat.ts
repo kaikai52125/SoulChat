@@ -308,6 +308,8 @@ export interface GroupRealtimeHandlers {
   onTaskPlan?: (d: { goal: string; subtasks: Array<{ id: string; description: string; assigned_persona: string; dependencies: string[]; expected_output: string }> }) => void
   onSubtaskStart?: (d: { subtask_id: string; persona: string }) => void
   onSubtaskDone?: (d: { subtask_id: string; persona: string; status: string; elapsed_ms?: number }) => void
+  onSubtaskToolStart?: (d: { subtask_id: string; persona: string; tool: string; query: string }) => void
+  onSubtaskToolResult?: (d: { subtask_id: string; persona: string; tool: string; query?: string; status?: string; latency_ms?: number }) => void
   onTaskOutput?: (d: { message_id: string; persona_name: string; content: string; created_at?: string }) => void
   onDone?: (d: { conversation_id: string }) => void
   onError?: (message: string) => void
@@ -389,6 +391,12 @@ export async function subscribeGroupEvents(
           break
         case 'subtask_done':
           handlers.onSubtaskDone?.(payload as never)
+          break
+        case 'subtask_tool_start':
+          handlers.onSubtaskToolStart?.(payload as never)
+          break
+        case 'subtask_tool_result':
+          handlers.onSubtaskToolResult?.(payload as never)
           break
         case 'task_output':
           handlers.onTaskOutput?.(payload as never)

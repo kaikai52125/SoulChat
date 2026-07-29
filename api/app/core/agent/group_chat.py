@@ -255,9 +255,7 @@ async def _run_task_mode(
             yield {"type": "final", "text": f"（任务协作执行失败：{e2}）"}
         return
 
-    # Step 2: 执行（yield 所有 subtask_start 后，每个 subtask 完成即刻 yield done）
-    for st in plan.subtasks:
-        yield {"type": "subtask_start", "subtask_id": st.id, "persona": st.assigned_persona}
+    # Step 2: 执行（execute_stream 实时产出 subtask_start/done/tool 事件）
     async for done_event in orchestrator.execute_stream(plan, blackboard, members):
         yield done_event
 

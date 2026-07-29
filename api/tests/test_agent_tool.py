@@ -1,12 +1,14 @@
 """Agent-as-Tool 单元测试。
 
 覆盖：工具名格式、描述生成、调用逻辑、记忆注入、单轮推理、
-      allow_agent_call 默认值、list_callable 查询、输入 schema。
+      allow_agent_call 默认值、list_callable 查询、输入 schema、
+      角色上下文切换（skill_load/bash_tool 感知被调用角色）。
 """
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from app.core.agent.persona_agent import PersonaAgent
 from app.core.agent.tools.base import ToolBuildContext
 from app.core.agent.tools.builtin.agent_tool import (
     CallAgentInput,
@@ -39,6 +41,15 @@ def _make_ctx(session=None, user_id=None):
         embed_holder={},
         stats_holder={},
     )
+
+
+def _make_persona_agent(model=None, tools=None, system_prompt=""):
+    """创建一个 PersonaAgent mock。"""
+    agent = MagicMock(spec=PersonaAgent)
+    agent.model = model or MagicMock()
+    agent.tools = tools or []
+    agent.system_prompt = system_prompt
+    return agent
 
 
 # ── 工具名格式 ────────────────────────────────────────────────────────────
@@ -106,56 +117,109 @@ class TestBuildAgentToolDescription:
         assert len(tool.description) < len(prompt) + 20
 
 
-# ── 调用使用角色配置 ──────────────────────────────────────────────────────
+# ── 调用使用 build_persona_agent 构建 ──────────────────────────────────────
 
 
-class TestAgentToolInvokeUsesPersonaConfig:
-    """任务 7.1.3: 调用时使用 persona 的 system_prompt 和 temperature。"""
+class TestAgentToolInvokeUsesBuildPersonaAgent:
+    """任务 7.1.3: 调用时通过 build_persona_agent() 构建完整 Agent，
+    并在执行前切换角色上下文（persona_memory.set_current_persona）。"""
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
-    async def test_uses_persona_temperature(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_build_persona_agent_called(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
-        """调用时传入 persona.temperature。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-        mock_build_tools.return_value = []
+        """_run 调用 build_persona_agent 构建角色 Agent。"""
+        mock_get_id.return_value = "persona-main"
+        persona = _make_persona(id="persona-123")
+        mock_agent = _make_persona_agent(system_prompt="test")
+        mock_bpa.return_value = mock_agent
 
         async def _fake_fc(*a, **kw):
             yield {"type": "final", "text": "done"}
         mock_run_fc.side_effect = _fake_fc
 
-        persona = _make_persona(temperature=0.5)
         ctx = _make_ctx()
         tool = await build_agent_tool(persona, ctx)
-        await tool.ainvoke({"query": "审查这段代码"})
+        await tool.ainvoke({"query": "审查代码"})
 
-        mock_build_chat.assert_called_once()
-        _call_kwargs = mock_build_chat.call_args[1]
-        assert _call_kwargs.get("temperature") == 0.5
+        mock_bpa.assert_called_once()
+        call_args = mock_bpa.call_args
+        assert call_args[0][1] == "persona-123"  # persona_id
+        assert call_args[0][2] == ctx.user_id    # owner_id
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
-    async def test_system_prompt_injected(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_persona_context_switched(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
-        """system_prompt 作为 SystemMessage 注入到 run_function_calling。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-        mock_build_tools.return_value = []
+        """_run 执行前 set_current_persona 切换到被调用角色，执行后恢复。"""
+        mock_get_id.return_value = "persona-main"
+        persona = _make_persona(id="persona-123")
+        mock_agent = _make_persona_agent(system_prompt="test")
+        mock_bpa.return_value = mock_agent
+
+        async def _fake_fc(*a, **kw):
+            yield {"type": "final", "text": "done"}
+        mock_run_fc.side_effect = _fake_fc
+
+        ctx = _make_ctx()
+        tool = await build_agent_tool(persona, ctx)
+        await tool.ainvoke({"query": "test"})
+
+        # 第一次调用：切换到被调用角色
+        mock_set.assert_any_call("persona-123")
+        # 最终恢复为原来的角色
+        mock_set.assert_any_call("persona-main")
+        assert mock_set.call_count == 2
+
+    @pytest.mark.asyncio
+    @patch("app.core.agent.orchestrator.run_function_calling")
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_persona_context_restored_on_error(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
+    ):
+        """即使 run_function_calling 异常，也恢复上下文。"""
+        mock_get_id.return_value = "persona-main"
+        persona = _make_persona(id="persona-123")
+        mock_agent = _make_persona_agent(system_prompt="test")
+        mock_bpa.return_value = mock_agent
+
+        async def _fake_fc(*args, **kwargs):
+            raise RuntimeError("模型调用超时")
+            yield  # pragma: no cover
+        mock_run_fc.side_effect = _fake_fc
+
+        ctx = _make_ctx()
+        tool = await build_agent_tool(persona, ctx)
+        await tool.ainvoke({"query": "test"})
+
+        # 即使异常，也应该恢复到原来的角色
+        mock_set.assert_any_call("persona-123")
+        mock_set.assert_any_call("persona-main")
+        assert mock_set.call_count >= 2
+
+    @pytest.mark.asyncio
+    @patch("app.core.agent.orchestrator.run_function_calling")
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_agent_system_prompt_passed_to_fc(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
+    ):
+        """build_persona_agent 返回的 system_prompt 作为 SystemMessage 注入。"""
+        mock_get_id.return_value = None
+        persona = _make_persona()
+        mock_agent = _make_persona_agent(system_prompt="你是一位代码审查专家。")
+        mock_bpa.return_value = mock_agent
 
         captured_msgs = []
         async def _fake_fc(model, tools, messages):
@@ -163,8 +227,6 @@ class TestAgentToolInvokeUsesPersonaConfig:
             yield {"type": "final", "text": "done"}
         mock_run_fc.side_effect = _fake_fc
 
-        prompt = "你是一位代码审查专家。"
-        persona = _make_persona(system_prompt=prompt)
         ctx = _make_ctx()
         tool = await build_agent_tool(persona, ctx)
         await tool.ainvoke({"query": "审查代码"})
@@ -172,25 +234,67 @@ class TestAgentToolInvokeUsesPersonaConfig:
         contents = [m.content for m in captured_msgs if hasattr(m, "content") and m.content]
         assert any("代码审查" in c for c in contents)
 
+    @pytest.mark.asyncio
+    @patch("app.core.agent.orchestrator.run_function_calling")
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_handle_build_persona_agent_error(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
+    ):
+        """build_persona_agent 抛出异常时返回错误消息（不进入 try/finally 块）。"""
+        persona = _make_persona(name="测试角色")
+        mock_bpa.side_effect = RuntimeError("数据库连接失败")
 
-class TestAgentToolMemoryTextInjected:
-    """任务 7.1.4: persona.memory_text 非空时，注入 system prompt。"""
+        ctx = _make_ctx()
+        tool = await build_agent_tool(persona, ctx)
+        result = await tool.ainvoke({"query": "test"})
+
+        assert "测试角色" in result
+        assert "失败" in result
+        mock_run_fc.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
-    async def test_memory_text_appended(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_handle_build_persona_agent_none(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
-        """memory_text 非空时追加到 system_prompt 末尾。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-        mock_build_tools.return_value = []
+        """build_persona_agent 返回 None 时返回提示。"""
+        persona = _make_persona(name="测试角色")
+        mock_bpa.return_value = None
+
+        ctx = _make_ctx()
+        tool = await build_agent_tool(persona, ctx)
+        result = await tool.ainvoke({"query": "test"})
+
+        assert "测试角色" in result
+        assert "不存在" in result
+        mock_run_fc.assert_not_called()
+
+
+# ── 记忆注入由 build_persona_agent 处理 ────────────────────────────────────
+
+
+class TestAgentToolMemoryTextInjected:
+    """任务 7.1.4: persona.memory_text 由 build_persona_agent 注入 system_prompt。"""
+
+    @pytest.mark.asyncio
+    @patch("app.core.agent.orchestrator.run_function_calling")
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_memory_text_in_agent_system_prompt(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
+    ):
+        """build_persona_agent 返回的 system_prompt 包含 memory_text。"""
+        mock_get_id.return_value = None
+        mock_agent = _make_persona_agent(
+            system_prompt="你是一位代码审查专家。\n\n【角色记忆】\n用户偏好：喜欢清晰注释的代码。"
+        )
+        mock_bpa.return_value = mock_agent
 
         captured_msgs = []
         async def _fake_fc(model, tools, messages):
@@ -213,20 +317,17 @@ class TestAgentToolMemoryTextInjected:
         assert "喜欢清晰注释" in all_content
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
-    async def test_memory_text_only(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_empty_system_prompt_ok(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
-        """当 system_prompt 为空仅 memory_text 非空时，memory_text 单独注入。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-        mock_build_tools.return_value = []
+        """agent.system_prompt 为空时不注入 SystemMessage。"""
+        mock_get_id.return_value = None
+        mock_agent = _make_persona_agent(system_prompt="")
+        mock_bpa.return_value = mock_agent
 
         captured_msgs = []
         async def _fake_fc(model, tools, messages):
@@ -234,44 +335,37 @@ class TestAgentToolMemoryTextInjected:
             yield {"type": "final", "text": "done"}
         mock_run_fc.side_effect = _fake_fc
 
-        persona = _make_persona(
-            system_prompt="",
-            memory_text="用户偏好：喜欢清晰注释的代码。",
-        )
+        persona = _make_persona(system_prompt="", memory_text="")
         ctx = _make_ctx()
         tool = await build_agent_tool(persona, ctx)
-        await tool.ainvoke({"query": "审查代码"})
+        await tool.ainvoke({"query": "test"})
 
-        all_content = " ".join(
-            m.content for m in captured_msgs if hasattr(m, "content") and m.content
-        )
-        assert "用户偏好" in all_content
+        # 应该只有 HumanMessage，没有 SystemMessage
+        from langchain_core.messages import SystemMessage
+        system_msgs = [m for m in captured_msgs if isinstance(m, SystemMessage)]
+        assert len(system_msgs) == 0
 
 
-# ── 不挂载工具 ────────────────────────────────────────────────────────────
+# ── 不挂载 agent__* 工具 ──────────────────────────────────────────────────
 
 
 class TestAgentToolHasTools:
     """任务 7.1.5: 被叫角色拥有工具（通过 run_function_calling 执行），
-    但不包含 agent__* 工具（防递归）。"""
+    但不包含 agent__* 工具（防递归，由 build_persona_agent 内部过滤）。"""
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
     async def test_uses_function_calling(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
         """调用使用 run_function_calling 而非裸 model.ainvoke。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-        mock_build_tools.return_value = []
+        mock_get_id.return_value = None
+        mock_agent = _make_persona_agent(system_prompt="test")
+        mock_bpa.return_value = mock_agent
 
-        # 模拟 run_function_calling 产出 token + final
         async def _fake_fc(*args, **kwargs):
             yield {"type": "token", "text": "审查"}
             yield {"type": "final", "text": "审查结果"}
@@ -286,27 +380,20 @@ class TestAgentToolHasTools:
         assert "审查结果" in result
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
-    async def test_agent_tools_filtered_out(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_agent_tools_passed_to_fc(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
-        """build_enabled_tools 返回的 tools 中包含 agent__xxx 时被过滤。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-
-        agent_tool = MagicMock()
-        agent_tool.name = "agent__another_agent"
+        """build_persona_agent 返回的 tools 传给 run_function_calling。"""
+        mock_get_id.return_value = None
         normal_tool = MagicMock()
         normal_tool.name = "web_search"
-        mock_build_tools.return_value = [normal_tool, agent_tool]
+        mock_agent = _make_persona_agent(tools=[normal_tool], system_prompt="test")
+        mock_bpa.return_value = mock_agent
 
-        # 记录传给 run_function_calling 的 tools
         captured_tools = []
         async def _fake_fc(model, tools, messages):
             captured_tools.extend(tools)
@@ -320,27 +407,23 @@ class TestAgentToolHasTools:
 
         tool_names = [t.name for t in captured_tools]
         assert "web_search" in tool_names
-        assert "agent__another_agent" not in tool_names, "agent__* 工具应被过滤"
 
 
 class TestAgentToolSingleTurnOnly:
     """任务 7.1.6: 被叫角色使用 function calling 循环执行。"""
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
     async def test_function_calling_called_once(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
         """run_function_calling 恰好被调用一次。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-        mock_build_tools.return_value = []
+        mock_get_id.return_value = None
+        mock_agent = _make_persona_agent(system_prompt="test")
+        mock_bpa.return_value = mock_agent
 
         async def _fake_fc(*args, **kwargs):
             yield {"type": "final", "text": "回答"}
@@ -354,33 +437,30 @@ class TestAgentToolSingleTurnOnly:
         assert mock_run_fc.call_count == 1
 
     @pytest.mark.asyncio
-    @patch("app.core.agent.tools.registry.build_enabled_tools")
     @patch("app.core.agent.orchestrator.run_function_calling")
-    @patch("app.core.agent.tools.builtin.agent_tool.get_default_chat_config")
-    @patch("app.core.agent.tools.builtin.agent_tool.build_chat_model")
-    async def test_not_streaming(
-        self, mock_build_chat, mock_get_config, mock_run_fc, mock_build_tools
+    @patch("app.core.agent.persona_agent.build_persona_agent")
+    @patch("app.core.agent.tools.builtin.persona_memory.set_current_persona")
+    @patch("app.core.agent.tools.builtin.persona_memory.get_current_persona_id")
+    async def test_fc_exception_handled(
+        self, mock_get_id, mock_set, mock_bpa, mock_run_fc
     ):
-        """model 以非流式模式构建（streaming=False）。"""
-        mock_config = MagicMock()
-        mock_get_config.return_value = mock_config
-        mock_model = MagicMock()
-        mock_model.model_name = "test"
-        mock_build_chat.return_value = mock_model
-        mock_build_tools.return_value = []
+        """run_function_calling 异常时返回友好错误。"""
+        mock_get_id.return_value = None
+        mock_agent = _make_persona_agent(system_prompt="test")
+        mock_bpa.return_value = mock_agent
 
         async def _fake_fc(*args, **kwargs):
-            yield {"type": "final", "text": "done"}
+            raise RuntimeError("模型调用超时")
+            yield  # pragma: no cover
         mock_run_fc.side_effect = _fake_fc
 
-        persona = _make_persona()
+        persona = _make_persona(name="出错的角色")
         ctx = _make_ctx()
         tool = await build_agent_tool(persona, ctx)
-        await tool.ainvoke({"query": "test"})
+        result = await tool.ainvoke({"query": "test"})
 
-        mock_build_chat.assert_called_once()
-        _call_kwargs = mock_build_chat.call_args[1]
-        assert _call_kwargs.get("streaming") is False
+        assert "出错" in result
+        assert "出错的角色" in result
 
 
 # ── allow_agent_call 默认值 ──────────────────────────────────────────────

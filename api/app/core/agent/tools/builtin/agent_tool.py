@@ -12,7 +12,6 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.core.agent.tools.base import ToolBuildContext
-from app.core.llm.chat_model import build_chat_model, get_default_chat_config
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,72 +45,54 @@ async def build_agent_tool(persona, ctx: ToolBuildContext) -> StructuredTool | N
     user_id = ctx.user_id
 
     async def _run(query: str) -> str:
-        """完整 Agent 循环：构建工具 → function calling → 返回结果。"""
-        # 1. 构建模型
+        """完整 Agent 循环：复用 build_persona_agent() 构建，拥有完整 Skill 能力。"""
+        from app.core.agent.persona_agent import build_persona_agent
+        from app.core.agent.tools.builtin.persona_memory import (
+            set_current_persona,
+            get_current_persona_id,
+        )
+
+        # 1. 构建完整角色 Agent（含 Skill 加载、prompt 注入、脚本工具、tool_keys 白名单）
+        #    build_persona_agent 内部已过滤 agent__* 工具，不会递归调用
         try:
-            config = await get_default_chat_config(session, user_id)
-            model = build_chat_model(config, temperature=persona.temperature, streaming=False)
+            agent = await build_persona_agent(session, persona.id, user_id)
         except Exception as e:
-            logger.error("agent-tool 构建 LLM 失败: %s", e)
-            return f"（调用角色失败：模型配置错误 - {e}）"
+            logger.error("agent-tool 构建角色 Agent 失败: %s", e)
+            return f"（调用角色「{persona.name}」失败：{e}）"
 
-        # 2. 构建工具 —— 按 persona 自己的配置，但排除 agent__* 防递归
-        from app.core.agent.tools.registry import build_enabled_tools
-        overrides = {
-            "knowledge_search": getattr(persona, "enable_knowledge", True),
-            "memory_search": getattr(persona, "enable_memory", True),
-            "web_search": getattr(persona, "enable_web_search", False),
-        }
-        kb_ids = list(getattr(persona, "kb_ids", []) or [])
-        enable_mcp = getattr(persona, "enable_mcp", False)
-        mcp_server_ids = [str(s) for s in (getattr(persona, "mcp_server_ids", []) or [])]
+        if agent is None:
+            return f"（角色「{persona.name}」不存在或已被删除）"
 
+        # 2. 切换上下文：让 skill_load / bash_tool 等工具感知当前是被调用角色
+        prev_persona_id = get_current_persona_id()
+        set_current_persona(str(persona.id))
         try:
-            tools = await build_enabled_tools(
-                session, user_id,
-                citations=[],  # agent 调用不收集引用到主对话
-                overrides=overrides,
-                stats_holder={},
-                kb_ids=kb_ids if kb_ids else None,
-                enable_mcp=enable_mcp,
-                mcp_server_ids=mcp_server_ids if mcp_server_ids else None,
-                layered=True,  # 核心工具直接注入
-            )
-            # 过滤掉所有 agent__* 工具（防止递归调用）
-            tools = [t for t in tools if not t.name.startswith("agent__")]
-        except Exception as e:
-            logger.warning("agent-tool 构建工具失败，降级为无工具: %s", e)
-            tools = []
+            # 3. 组装消息
+            from langchain_core.messages import HumanMessage, SystemMessage
 
-        # 3. 组装 system prompt
-        from langchain_core.messages import HumanMessage, SystemMessage
+            messages: list = []
+            if agent.system_prompt:
+                messages.append(SystemMessage(content=agent.system_prompt))
+            messages.append(HumanMessage(content=query))
 
-        sys_content = prompt
-        memory = (getattr(persona, "memory_text", "") or "").strip()
-        if memory:
-            sys_content = f"{sys_content}\n\n{memory}" if sys_content else memory
+            # 4. 运行 function calling Agent 循环
+            # 注意：不在此创建 tracing span —— orchestrator 的 tool.ainvoke 外层
+            # 已经有 agent_call span。内部 span（llm_call/tool_call）通过 OTel
+            # contextvars 自动成为其子节点，天然形成"工具层级"嵌套。
+            from app.core.agent.orchestrator import run_function_calling
 
-        messages: list = []
-        if sys_content:
-            messages.append(SystemMessage(content=sys_content))
-        messages.append(HumanMessage(content=query))
+            collected = ""
+            try:
+                async for ev in run_function_calling(agent.model, agent.tools, messages):
+                    if ev["type"] in ("token", "final"):
+                        collected += ev.get("text", "")
+            except Exception as e:
+                logger.error("agent-tool function calling 失败: %s", e)
+                return f"（调用角色「{persona.name}」时出错：{e}）"
 
-        # 4. 运行 function calling Agent 循环
-        # 注意：不在此创建 tracing span —— orchestrator 的 tool.ainvoke 外层
-        # 已经有 agent_call span。内部 span（llm_call/tool_call）通过 OTel
-        # contextvars 自动成为其子节点，天然形成"工具层级"嵌套。
-        from app.core.agent.orchestrator import run_function_calling
-
-        collected = ""
-        try:
-            async for ev in run_function_calling(model, tools, messages):
-                if ev["type"] in ("token", "final"):
-                    collected += ev.get("text", "")
-        except Exception as e:
-            logger.error("agent-tool function calling 失败: %s", e)
-            return f"（调用角色「{persona.name}」时出错：{e}）"
-
-        return collected.strip() or f"（角色「{persona.name}」未产生输出）"
+            return collected.strip() or f"（角色「{persona.name}」未产生输出）"
+        finally:
+            set_current_persona(prev_persona_id)
 
     return StructuredTool.from_function(
         coroutine=_run,
