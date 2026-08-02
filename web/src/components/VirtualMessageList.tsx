@@ -50,9 +50,10 @@ export default function VirtualMessageList({
       itemContent={itemContent}
       initialTopMostItemIndex={itemCount > 0 ? itemCount - 1 : 0}
       initialItemCount={Math.min(itemCount, 20)}
+      overscan={{ main: 400, reverse: 1200 }}
       atBottomThreshold={120}
       atBottomStateChange={handleAtBottomStateChange}
-      increaseViewportBy={{ top: 300, bottom: 300 }}
+      increaseViewportBy={{ top: 80, bottom: 200 }}
       style={{ height: '100%' }}
     />
   )
