@@ -14,7 +14,6 @@ from app.core.response import success
 from app.db.postgres import get_session
 from app.models.user_model import User
 from app.schemas.group_chat_schema import (
-    GroupChatStreamRequest,
     GroupCreateRequest,
     GroupJoinRequest,
     GroupSayRequest,
@@ -56,24 +55,7 @@ async def list_group_members(
     return success(members)
 
 
-@router.post("/groups/chat/stream")
-async def group_chat_stream(
-    body: GroupChatStreamRequest,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-):
-    """群聊流式：主持人调度多角色依次发言。"""
-    service = GroupChatService(session)
-    return StreamingResponse(
-        service.stream_group_chat(user.id, body),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
+# /groups/chat/stream 已删除（死代码，当前走 /groups/{conv_id}/say 路径）
 
 @router.delete("/groups/{conv_id}/messages")
 async def clear_group_messages(

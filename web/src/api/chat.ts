@@ -179,28 +179,6 @@ export interface GroupChatMessage extends ChatMessage {
   sender_name?: string | null
 }
 
-export interface GroupStreamHandlers {
-  onMeta?: (d: { conversation_id: string; title: string }) => void
-  onSpeakerStart?: (d: {
-    persona_id: string
-    name: string
-    avatar_url: string | null
-  }) => void
-  onToken?: (text: string) => void
-  onToolStart?: (d: { tool: string; query: string }) => void
-  onToolResult?: (d: {
-    tool: string
-    query: string
-    status?: string
-    text?: string
-    stats?: Record<string, unknown>
-    latency_ms?: number
-  }) => void
-  onSpeakerEnd?: (d: { persona_id: string; message_id: string }) => void
-  onDone?: (d: { conversation_id: string }) => void
-  onError?: (message: string) => void
-}
-
 export const groupApi = {
   createGroup(memberPersonaIds: string[], title?: string, enableTools = false) {
     return client.post<unknown, Wrapped<Conversation>>('/groups', {
@@ -412,87 +390,6 @@ export async function subscribeGroupEvents(
   }
 }
 
-// 群聊流式：解析 speaker_start / token / speaker_end 等事件
-export async function streamGroupChat(
-  conversationId: string,
-  message: string,
-  handlers: GroupStreamHandlers,
-  signal?: AbortSignal,
-  imageKeys?: string[],
-): Promise<void> {
-  const token = localStorage.getItem('access_token')
-  const resp = await fetch('/api/groups/chat/stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
-      conversation_id: conversationId,
-      message,
-      image_keys: imageKeys ?? [],
-    }),
-    signal,
-  })
-  if (!resp.ok || !resp.body) {
-    handlers.onError?.(`请求失败（HTTP ${resp.status}）`)
-    return
-  }
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const blocks = buffer.split('\n\n')
-    buffer = blocks.pop() ?? ''
-    for (const block of blocks) {
-      const lines = block.split('\n')
-      let event = 'message'
-      let data = ''
-      for (const line of lines) {
-        if (line.startsWith('event:')) event = line.slice(6).trim()
-        else if (line.startsWith('data:')) data += line.slice(5).trim()
-      }
-      if (!data) continue
-      let payload: Record<string, unknown> = {}
-      try {
-        payload = JSON.parse(data)
-      } catch {
-        continue
-      }
-      switch (event) {
-        case 'meta':
-          handlers.onMeta?.(payload as never)
-          break
-        case 'speaker_start':
-          handlers.onSpeakerStart?.(payload as never)
-          break
-        case 'token':
-          handlers.onToken?.(payload.text as string)
-          break
-        case 'tool_start':
-          handlers.onToolStart?.(payload as never)
-          break
-        case 'tool_result':
-          handlers.onToolResult?.(payload as never)
-          break
-        case 'speaker_end':
-          handlers.onSpeakerEnd?.(payload as never)
-          break
-        case 'done':
-          handlers.onDone?.(payload as never)
-          break
-        case 'error':
-          handlers.onError?.((payload.message as string) ?? '群聊出错')
-          break
-      }
-    }
-  }
-}
-
-// SSE 流式发送：用 fetch + ReadableStream 解析 text/event-stream
 export async function streamChat(
   opts: SendOptions,
   handlers: StreamHandlers,

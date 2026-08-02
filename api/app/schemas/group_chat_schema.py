@@ -12,16 +12,7 @@ class GroupCreateRequest(BaseModel):
     enable_tools: bool = False
 
 
-class GroupChatStreamRequest(BaseModel):
-    """群聊发送消息（SSE 流式）。消息含 @角色名 时只让被 @ 的角色回复。"""
-
-    conversation_id: uuid.UUID
-    message: str = Field(..., min_length=1)
-    # 多模态：图片 file_key 列表（带图时每个角色用多模态模型看图发言）
-    image_keys: list[str] = Field(default_factory=list)
-    # 模式切换：social（社交对话）或 task（任务协作），默认 social
-    mode: str = Field(default="social", pattern=r"^(social|task)$")
-
+# GroupChatStreamRequest 已删除（死代码，当前走 GroupSayRequest 路径）
 
 class GroupSayRequest(BaseModel):
     """多人实时群聊：某真人成员发言。落库后广播，后台触发 AI 接话。"""
