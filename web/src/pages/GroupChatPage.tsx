@@ -52,6 +52,7 @@ import {
 } from '@/api/chat'
 import { personaApi, type Persona } from '@/api/personas'
 import MarkdownMessage from '@/components/MarkdownMessage'
+import VirtualMessageList from '@/components/VirtualMessageList'
 import { AuthenticatedImage } from '@/components/AuthenticatedImage'
 import VoiceInputButton from '@/components/VoiceInputButton'
 import { useAuthStore } from '@/stores/authStore'
@@ -282,7 +283,6 @@ export default function GroupChatPage() {
   const [joinOpen, setJoinOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [inviteOpen, setInviteOpen] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<InputRef>(null)
   // 实时订阅控制：切换会话/卸载时 abort 旧连接
   const subRef = useRef<AbortController | null>(null)
@@ -334,6 +334,8 @@ export default function GroupChatPage() {
   const streamingRef = useRef<string | null>(null)
   // 已渲染过的真人消息 id 集合（say 乐观插入与 SSE 回声去重）
   const seenHumanRef = useRef<Set<string>>(new Set())
+  // 用户发消息后强制滚到底
+  const scrollToBottomRef = useRef<(() => void) | null>(null)
   // Token 节流：积攒到一帧再批量 setMessages
   const tokenBufRef = useRef<Record<string, string>>({})
   const tokenRafRef = useRef<number>(0)
@@ -417,15 +419,6 @@ export default function GroupChatPage() {
       .map((p) => ({ name: p.name, avatar_url: p.avatar_url }))
   }
 
-  const scrollRAF = useRef<number>(0)
-  useEffect(() => {
-    if (scrollRAF.current) return
-    scrollRAF.current = requestAnimationFrame(() => {
-      scrollRAF.current = 0
-      const el = scrollRef.current
-      if (el) el.scrollTop = el.scrollHeight
-    })
-  }, [messages.length, thinking])
 
   const openConversation = async (id: string) => {
     // 断开旧订阅
@@ -437,6 +430,7 @@ export default function GroupChatPage() {
     setThinking(false)
     setActiveId(id)
     setListOpen(false)
+    setMessages([]) // 立即清旧消息，避免闪旧内容再跳到底
     setLoadingMsgs(true)
     try {
       const [msgsResp, membersResp, humansResp] = await Promise.all([
@@ -533,6 +527,10 @@ export default function GroupChatPage() {
             createdAt: new Date().toISOString(),
           },
         ])
+        // 自己发的消息 → 无条件滚到底
+        if (d.user_id === user?.id) {
+          setTimeout(() => scrollToBottomRef.current?.(), 50)
+        }
       },
       onSpeakerStart: (d: { persona_id: string; name: string }) => {
         setThinking(false)
@@ -1216,7 +1214,7 @@ export default function GroupChatPage() {
         )}
 
         {/* 消息区 */}
-        <div className="gc-messages" ref={scrollRef}>
+        <div className="gc-messages">
           <div className="gc-thread">
           {!activeId ? (
             <div className="gc-placeholder">
@@ -1253,14 +1251,29 @@ export default function GroupChatPage() {
               </p>
             </div>
           ) : (
-            messages.map((m) => {
+            <VirtualMessageList
+              itemCount={messages.length}
+              scrollToBottomRef={scrollToBottomRef}
+              itemContent={(idx) => {
+                const m = messages[idx]
+                if (!m) return null
+                // Virtuoso 的 item wrapper 打断了 .gc-thread 的 flex 链，
+                // 包一层 flex 容器代替：align-self → justifyContent
+                const rowAlign = m.isTaskPlan ? 'center'
+                  : m.role === 'user' && m.isMe !== false ? 'flex-end'
+                  : 'flex-start'
+                const outer = (el: React.ReactNode) => (
+                  <div key={m.id} style={{ display: 'flex', justifyContent: rowAlign, width: '100%' }}>
+                    {el}
+                  </div>
+                )
               if (m.role === 'user') {
                 // 其他真人成员的发言：靠左显示昵称 + 彩色头像
                 if (m.isMe === false && m.senderUserId) {
                   const human = humanMap.get(m.senderUserId)
                   const nick = human?.nickname || m.senderName || '成员'
-                  return (
-                    <div key={m.id} className="gc-row gc-row--ai">
+                  return outer(
+                    <div className="gc-row gc-row--ai">
                       <PersonaAvatar
                         name={nick}
                         avatarUrl={human?.avatar_url}
@@ -1288,8 +1301,8 @@ export default function GroupChatPage() {
                     </div>
                   )
                 }
-                return (
-                  <div key={m.id} className="gc-row gc-row--user">
+                return outer(
+                  <div className="gc-row gc-row--user">
                     <div className="gc-user-block">
                       {m.images && m.images.length > 0 && (
                         <div className="gc-msg-images">
@@ -1330,8 +1343,8 @@ export default function GroupChatPage() {
                 const doneCount = m.taskSteps.filter((s) => s.status === 'done').length
                 const totalCount = m.taskSteps.length
                 const allDone = doneCount === totalCount
-                return (
-                  <div key={m.id} style={{ margin: '12px 0', display: 'flex', justifyContent: 'center' }}>
+                return outer(
+                  <div style={{ margin: '12px 0', display: 'flex', justifyContent: 'center' }}>
                     <div style={{
                       background: allDone ? '#f0faf3' : '#f6f8fa',
                       borderRadius: 10,
@@ -1347,7 +1360,7 @@ export default function GroupChatPage() {
                         const tr = s.toolRuns
                         const hasTools = tr && tr.length > 0
                         const runningTools = tr?.filter((t) => t.status === 'running').length || 0
-                        return (
+                        return outer(
                           <div key={s.id} style={{
                             fontSize: 13, padding: '6px 0',
                             color: s.status === 'running' ? '#0969da' : s.status === 'done' ? '#1a7f37' : '#656d76',
@@ -1371,7 +1384,7 @@ export default function GroupChatPage() {
                                   const q = tr?.find((t) => t.tool === r.tool)?.query || ''
                                   const queryShort = q.length > 40 ? q.slice(0, 40) + '…' : q
                                   const lat = tr?.find((t) => t.tool === r.tool && t.status !== 'running')?.latencyMs
-                                  return (
+                                  return outer(
                                     <div key={j} style={{
                                       fontSize: 11, padding: '2px 6px', borderRadius: 4,
                                       background: r.running ? '#ddf4ff' : '#f6f8fa',
@@ -1403,8 +1416,8 @@ export default function GroupChatPage() {
                   </div>
                 )
               }
-              return (
-                <div key={m.id} className="gc-row gc-row--ai">
+              return outer(
+                <div className="gc-row gc-row--ai">
                   <PersonaAvatar name={name} avatarUrl={member?.avatar_url} size={38} />
                   <div className="gc-ai-block">
                     <div className="gc-sender-name">{name}</div>
@@ -1413,7 +1426,7 @@ export default function GroupChatPage() {
                       const totalCalls = runs.reduce((s, r) => s + r.count, 0)
                       const running = runs.some((r) => r.running)
                       const open = running || expandedTools.has(m.id)
-                      return (
+                      return outer(
                         <div className="gc-tool-area">
                           <span
                             className="gc-tool-summary"
@@ -1428,7 +1441,7 @@ export default function GroupChatPage() {
                             <div className="gc-tool-chips">
                               {runs.map((tr, idx) => {
                                 const meta = resolveToolMeta(tr.tool)
-                                return (
+                                return outer(
                                   <Tooltip key={idx} title={meta.label}>
                                     <span
                                       className={`gc-tool-chip ${tr.running ? 'gc-tool-chip--run' : ''}`}
@@ -1510,8 +1523,9 @@ export default function GroupChatPage() {
                     )}
                   </div>
                 </div>
-              )
-            })
+                )
+              }}
+            />
           )}
           {thinking && (
             <div className="gc-row gc-row--ai gc-thinking-row">

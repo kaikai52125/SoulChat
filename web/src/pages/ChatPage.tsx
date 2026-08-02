@@ -36,6 +36,7 @@ import {
 } from '@/api/chat'
 import { favoriteApi } from '@/api/favorites'
 import { AuthenticatedImage } from '@/components/AuthenticatedImage'
+import VirtualMessageList from '@/components/VirtualMessageList'
 import VoiceInputButton from '@/components/VoiceInputButton'
 import MessageItem from './chat/MessageItem'
 import SelectionPopover from './chat/SelectionPopover'
@@ -97,9 +98,9 @@ export default function ChatPage() {
       resumeAbortRef.current?.abort()
     }
   }, [])
-  const scrollRef = useRef<HTMLDivElement>(null)
   const msgRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const inputRef = useRef<{ focus: () => void } | null>(null)
+  const scrollToBottomRef = useRef<(() => void) | null>(null)
   const pendingGreetingRef = useRef<string | null>(null)
   const groupsInited = useRef(false)
   // 发送流 / 续传订阅的中断控制器：组件卸载或切会话时断开（后台生成不受影响照常落库）
@@ -288,14 +289,12 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    if (highlightId) return // 深链定位时不强制滚到底
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, highlightId])
+  // 滚动由 VirtualMessageList 内置 followOutput 处理
 
   const openConversation = async (id: string, focusMessageId?: string) => {
     setActiveId(id)
     setConvDrawerOpen(false)
+    setMessages([]) // 立即清旧消息，避免闪旧内容再跳到底
     // 切会话：断开上一个会话的续传订阅
     resumeAbortRef.current?.abort()
     resumeAbortRef.current = null
@@ -669,6 +668,8 @@ export default function ChatPage() {
       streaming: true,
     }
     setMessages((prev) => [...prev, userMsg, aiMsg])
+    // 用户主动发消息 → 无条件滚到底
+    setTimeout(() => scrollToBottomRef.current?.(), 50)
 
     let convId = activeId
     // 新发送前断开可能存在的续传订阅，避免与本次发送流重复渲染
@@ -902,7 +903,7 @@ export default function ChatPage() {
             </Button>
           </Tooltip>
         )}
-        <div ref={scrollRef} className="chat-scroll" style={{ flex: 1, overflowY: 'auto', padding: '28px 0' }}>
+        <div style={{ flex: 1 }}>
           {messages.length === 0 ? (
             <div className="chat-empty">
               <div className="chat-empty-orb">💬</div>
@@ -923,23 +924,19 @@ export default function ChatPage() {
               </div>
             </div>
           ) : (
-            <div className="chat-fluid" style={{ padding: '0 24px' }}>
-              {messages.map((m) => (
-                <div
-                  key={m.id}
-                  ref={(el) => {
-                    msgRefs.current[m.id] = el
-                  }}
-                  style={{
-                    borderRadius: 12,
-                    transition: 'background 0.4s',
-                    background: highlightId === m.id ? '#FFF7E6' : 'transparent',
-                  }}
-                >
-                  <MessageItem msg={m} onRegenerate={onRegenerate} avatars={avatars} />
-                </div>
-              ))}
-            </div>
+            <VirtualMessageList
+              itemCount={messages.length}
+              scrollToBottomRef={scrollToBottomRef}
+              itemContent={(idx) => {
+                const m = messages[idx]
+                if (!m) return null
+                return (
+                  <div style={{ borderRadius: 12, background: highlightId === m.id ? '#FFF7E6' : 'transparent', padding: '0 24px' }}>
+                    <MessageItem msg={m} onRegenerate={onRegenerate} avatars={avatars} />
+                  </div>
+                )
+              }}
+            />
           )}
         </div>
 
