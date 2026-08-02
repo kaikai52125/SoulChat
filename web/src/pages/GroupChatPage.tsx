@@ -70,19 +70,19 @@ interface GroupToolRun {
   latencyMs?: number
 }
 
-// 工具 chip 去重：同一工具多次调用合并成一个（带 ×次数），running 状态合并保留，
-// 避免重复调用刷出一长串相同 chip。
+// 工具 chip 去重：相同工具+相同参数合并（×次数），不同参数分别显示
 function dedupToolRuns(
   runs: GroupToolRun[],
-): { tool: string; count: number; running: boolean }[] {
-  const map = new Map<string, { tool: string; count: number; running: boolean }>()
+): { tool: string; query?: string; count: number; running: boolean }[] {
+  const map = new Map<string, { tool: string; query?: string; count: number; running: boolean }>()
   for (const r of runs) {
-    const e = map.get(r.tool)
+    const key = r.tool + '|' + (r.query || '')
+    const e = map.get(key)
     if (e) {
       e.count += 1
       if (r.status === 'running') e.running = true
     } else {
-      map.set(r.tool, { tool: r.tool, count: 1, running: r.status === 'running' })
+      map.set(key, { tool: r.tool, query: r.query, count: 1, running: r.status === 'running' })
     }
   }
   return Array.from(map.values())
@@ -1381,9 +1381,8 @@ export default function GroupChatPage() {
                               <div style={{ marginLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 {dedupToolRuns(tr).map((r, j) => {
                                   const meta = resolveToolMeta(r.tool)
-                                  const q = tr?.find((t) => t.tool === r.tool)?.query || ''
-                                  const queryShort = q.length > 40 ? q.slice(0, 40) + '…' : q
-                                  const lat = tr?.find((t) => t.tool === r.tool && t.status !== 'running')?.latencyMs
+                                  const queryShort = (r.query || '').length > 50 ? (r.query || '').slice(0, 50) + '…' : (r.query || '')
+                                  const lat = tr?.find((t) => t.tool === r.tool && t.query === r.query && t.status !== 'running')?.latencyMs
                                   return outer(
                                     <div key={j} style={{
                                       fontSize: 11, padding: '2px 6px', borderRadius: 4,
