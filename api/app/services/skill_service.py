@@ -453,9 +453,19 @@ class SkillService:
 
     # ── 调用计数 ──
 
-    async def record_call(self, skill_id: uuid.UUID) -> None:
-        """技能被 Agent 调用时 +1。"""
-        await self.repo.bump_call_count(skill_id)
+    async def record_call(
+        self, skill_id: uuid.UUID, *, success: bool = True,
+        tool_name: str = "", duration_ms: int = 0, error_msg: str | None = None,
+    ) -> None:
+        """技能被 Agent 调用时 +1。success=True 计成功，False 计失败。"""
+        await self.repo.record_call(
+            skill_id, success=success,
+            tool_name=tool_name, duration_ms=duration_ms, error_msg=error_msg,
+        )
+
+    async def get_stats(self, skill_id: uuid.UUID) -> dict:
+        """查询技能的调用统计。"""
+        return await self.repo.get_call_stats(skill_id)
 
     # ── 出参 ──
 
@@ -476,4 +486,9 @@ class SkillService:
             "is_builtin": skill.is_builtin,
             "is_public": skill.is_public,
             "call_count": skill.call_count,
+            "success_count": skill.success_count,
+            "error_count": skill.error_count,
+            "last_called_at": skill.last_called_at.isoformat()
+            if skill.last_called_at
+            else None,
         }

@@ -93,13 +93,21 @@ async def build_persona_agent(
             tools = [t for t in tools if t.name in all_tool_keys]
 
     # ── 6. Skill 脚本工具 ──
+    async def _record_skill_call(skill_id):
+        try:
+            from app.services.skill_service import SkillService
+            svc = SkillService(session)
+            await svc.record_call(skill_id, success=True, tool_name="skill_tool")
+        except Exception:
+            pass  # 统计失败不影响对话
+
     for s in resident_skills:
         if s.storage_path and s.config.get("tools"):
             try:
                 from app.core.agent.tools.skill_executor import build_skill_tools
                 st = build_skill_tools(
                     skill_id=s.id, skill_config=s.config,
-                    skill_dir=s.storage_path, record_call=None,
+                    skill_dir=s.storage_path, record_call=_record_skill_call,
                     session=session, user_id=owner_id,
                 )
                 tools.extend(st)

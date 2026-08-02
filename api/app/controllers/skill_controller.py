@@ -118,6 +118,19 @@ async def delete_skill(
     return success(message="已删除")
 
 
+@persona_skill_router.get("/{skill_id}/stats")
+async def skill_stats(
+    persona_id: uuid.UUID,
+    skill_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """返回技能的调用统计数据（汇总 + 近30天趋势 + 最近20条）。"""
+    await _check_persona(user.id, persona_id, session)
+    data = await SkillService(session).get_stats(skill_id)
+    return success(data)
+
+
 # ── 技能市场 ──
 
 @marketplace_router.get("")

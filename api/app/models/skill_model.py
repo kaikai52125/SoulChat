@@ -67,6 +67,14 @@ class Skill(Base):
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     # 技能被调用次数（每次 Agent 执行该技能声明的工具时 +1）
     call_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 成功次数（脚本 exit code 0）
+    success_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 失败次数（脚本 exit code != 0 或异常）
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 最近一次调用时间
+    last_called_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # 脚本文件存储路径（zip 导入时解压到 storage/skills/{skill_id}/）
     storage_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     sort: Mapped[int] = mapped_column(Integer, default=0)
@@ -75,4 +83,25 @@ class Skill(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SkillCallLog(Base):
+    """技能调用日志 —— 每次工具执行记录一条，供统计图表使用。"""
+    __tablename__ = "skill_call_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    skill_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("skills.id", ondelete="CASCADE"),
+        index=True,
+    )
+    tool_name: Mapped[str] = mapped_column(String(64), default="")
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

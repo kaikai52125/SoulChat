@@ -32,6 +32,7 @@ import { AuthenticatedImage } from '@/components/AuthenticatedImage'
 import { personaGradientCss, personaInitial } from './personaGradient'
 import SkillEditModal from '../skill/SkillEditModal'
 import MarketModal from './SkillMarketModal'
+import SkillDetailModal from './SkillDetailModal'
 import GrowthPanel from '@/components/persona/GrowthPanel'
 import PublishPersonaModal from '@/components/market/PublishPersonaModal'
 
@@ -40,6 +41,24 @@ interface Props {
   persona: Persona | null // null = 新建
   onClose: () => void
   onSaved: () => void
+}
+
+function _hasScriptTools(s: Skill): boolean {
+  const tools = s.config?.tools
+  return Array.isArray(tools) && tools.length > 0
+}
+
+function _relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  const sec = Math.floor(diff / 1000)
+  if (sec < 60) return '刚刚'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}分钟前`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}小时前`
+  const day = Math.floor(hr / 24)
+  if (day < 30) return `${day}天前`
+  return `${Math.floor(day / 30)}月前`
 }
 
 export default function PersonaEditModal({ open, persona, onClose, onSaved }: Props) {
@@ -60,6 +79,7 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null)
   const [importingSkill, setImportingSkill] = useState(false)
   const [marketOpen, setMarketOpen] = useState(false)
+  const [detailSkill, setDetailSkill] = useState<Skill | null>(null)
 
   // ── 工具 ──
   const [enableKnowledge, setEnableKnowledge] = useState(true)
@@ -366,13 +386,18 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
                     border: '1px solid #f0f0f0', gap: 12,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1, cursor: 'pointer' }}
+                    onClick={() => setDetailSkill(s)}
+                  >
                     <span style={{ fontSize: 18, flexShrink: 0 }}>{s.icon}</span>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 500 }}>{s.name}</div>
                       <div style={{ fontSize: 12, color: '#98A2B3' }}>
                         {s.description || s.source}
-                        {s.call_count > 0 && ` · 调用 ${s.call_count} 次`}
+                        {_hasScriptTools(s)
+                          ? ` · 调用 ${s.call_count || 0} 次${s.call_count > 0 ? ` (成功 ${s.success_count || 0} · 失败 ${s.error_count || 0})` : ''}${s.last_called_at ? ` · ${_relativeTime(s.last_called_at)}` : ''}`
+                          : ' · 提示词注入型（常驻生效）'}
                       </div>
                     </div>
                     {s.is_public && <Tag color="purple" style={{ margin: 0, flexShrink: 0 }}>市场</Tag>}
@@ -460,6 +485,12 @@ export default function PersonaEditModal({ open, persona, onClose, onSaved }: Pr
             personaId={pid}
             onClose={() => setMarketOpen(false)}
             onAdded={refreshSkills}
+          />
+          <SkillDetailModal
+            open={!!detailSkill}
+            personaId={pid || ''}
+            skill={detailSkill}
+            onClose={() => setDetailSkill(null)}
           />
         </div>
       ),

@@ -39,6 +39,9 @@ export interface Skill {
   is_builtin: boolean
   is_public: boolean
   call_count: number
+  success_count: number
+  error_count: number
+  last_called_at: string | null
 }
 
 export interface SkillInput {
@@ -107,5 +110,8 @@ export const skillApi = {
       null,
       { params: { persona_id: personaId } },
     )
+  },
+  stats(personaId: string, skillId: string) {
+    return client.get<unknown, Wrapped<any>>(`${_url(personaId)}/${skillId}/stats`)
   },
 }

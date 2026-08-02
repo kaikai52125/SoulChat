@@ -5,6 +5,7 @@ Agent 通过此工具执行 Skill 声明的脚本文件（Python/Shell/Node/R �
 """
 import asyncio
 import os
+import time
 import uuid
 
 from langchain_core.tools import StructuredTool
@@ -68,7 +69,7 @@ async def _build(ctx: ToolBuildContext) -> StructuredTool | None:
             )
 
         # 2. 在所有 Skill 目录中查找脚本
-        skill_dir = await _find_skill_dir(script_rel, session, user_id)
+        skill_dir, skill_id = await _find_skill_dir(script_rel, session, user_id)
         if skill_dir is None:
             return (
                 f"安全限制：未在任何技能目录中找到脚本「{script_rel}」。"
@@ -102,7 +103,8 @@ async def _build(ctx: ToolBuildContext) -> StructuredTool | None:
 
         # 5. 执行（使用 subprocess.run + 线程池，跨平台可靠）
         import subprocess
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}  # Windows 上避免 GBK 编码问题
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        t_start = time.perf_counter()
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
@@ -113,17 +115,48 @@ async def _build(ctx: ToolBuildContext) -> StructuredTool | None:
                 cwd=real_skill,
                 env=env,
             )
+            duration_ms = int((time.perf_counter() - t_start) * 1000)
         except subprocess.TimeoutExpired:
+            duration_ms = SCRIPT_TIMEOUT * 1000
+            if skill_id:
+                try:
+                    from app.repositories.skill_repository import SkillRepository
+                    await SkillRepository(session).record_call(
+                        uuid.UUID(skill_id), success=False, tool_name="bash",
+                        duration_ms=duration_ms, error_msg="超时",
+                    )
+                except Exception as e:
+                    logger.warning("bash 技能统计失败: %s", e)
             return f"脚本执行超时（>{SCRIPT_TIMEOUT}s）"
-        except FileNotFoundError:
-            return f"错误：解释器「{interpreter}」未找到。"
-        except OSError as e:
+        except (FileNotFoundError, OSError, Exception) as e:
+            duration_ms = int((time.perf_counter() - t_start) * 1000)
+            if skill_id:
+                try:
+                    from app.repositories.skill_repository import SkillRepository
+                    await SkillRepository(session).record_call(
+                        uuid.UUID(skill_id), success=False, tool_name="bash",
+                        duration_ms=duration_ms, error_msg=str(e)[:200],
+                    )
+                except Exception as e2:
+                    logger.warning("bash 技能统计失败: %s", e2)
             return f"错误：启动子进程失败 - {e}"
-        except Exception as e:
-            return f"错误：启动子进程异常 - {type(e).__name__}: {e}"
 
         out_text = result.stdout.decode("utf-8", errors="replace").strip()
         err_text = result.stderr.decode("utf-8", errors="replace").strip()
+
+        # 记录技能调用统计
+        if skill_id:
+            try:
+                from app.repositories.skill_repository import SkillRepository
+                await SkillRepository(session).record_call(
+                    uuid.UUID(skill_id),
+                    success=(result.returncode == 0),
+                    tool_name="bash",
+                    duration_ms=duration_ms,
+                    error_msg=err_text[:200] if result.returncode != 0 else None,
+                )
+            except Exception as e:
+                logger.warning("bash 技能调用统计失败（忽略）: skill_id=%s err=%s", skill_id, e)
 
         if result.returncode != 0:
             msg = f"命令退出码 {result.returncode}"
@@ -160,8 +193,9 @@ def _is_within(parent: str, child: str) -> bool:
 
 async def _find_skill_dir(
     script_rel: str, session, user_id: uuid.UUID
-) -> str | None:
-    """查找脚本所属目录：优先用上下文中的角色 ID，否则用活跃角色。"""
+) -> tuple[str, str] | tuple[None, None]:
+    """查找脚本所属目录和 skill_id：优先用上下文中的角色 ID，否则用活跃角色。
+    返回 (skill_dir, skill_id) 或 (None, None)。"""
     from app.repositories.agent_persona_repository import AgentPersonaRepository
     from app.repositories.skill_repository import SkillRepository
     from app.core.agent.tools.builtin.persona_memory import get_current_persona_id
@@ -173,7 +207,7 @@ async def _find_skill_dir(
         else:
             persona = await AgentPersonaRepository(session).get_active(user_id)
         if persona is None:
-            return None
+            return None, None
 
         from app.services.skill_service import SKILL_STORAGE_ROOT
         skills = await SkillRepository(session).list_by_persona(persona.id)
@@ -181,8 +215,6 @@ async def _find_skill_dir(
             sp = sk.storage_path
             if not sp:
                 continue
-            # storage_path 存的是相对路径 (./storage/skills/{id})
-            # 用 os.path.realpath 统一解析为绝对路径
             if sp.startswith("./"):
                 sp = sp[2:]
             skill_dir = os.path.realpath(os.path.join(SKILL_STORAGE_ROOT, os.path.basename(sp)))
@@ -191,11 +223,11 @@ async def _find_skill_dir(
 
             candidate = os.path.join(skill_dir, script_rel)
             if os.path.isfile(candidate):
-                return skill_dir
+                return skill_dir, str(sk.id)
     except Exception as e:
         logger.warning("查找 Skill 目录失败（忽略）: %s", e)
 
-    return None
+    return None, None
 
 
 register_tool(
